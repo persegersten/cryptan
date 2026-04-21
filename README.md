@@ -1,0 +1,2 @@
+# cryptan
+Crypto trading model
