@@ -1,3 +1,6 @@
+# Local shell script
+local_run.sh
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
