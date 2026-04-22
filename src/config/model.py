@@ -8,6 +8,44 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+class FeatureConfig(BaseModel):
+    """Configurable windows for feature engineering.
+
+    All windows must be positive integers.  The defaults match the MVP
+    feature set described in the repository instructions.
+    """
+
+    return_windows: list[int] = Field(
+        default=[1, 5, 20],
+        description="N-bar close return windows, e.g. [1, 5, 20].",
+    )
+    ma_short_window: int = Field(
+        default=7,
+        gt=0,
+        description="Short rolling-mean window (bars).",
+    )
+    ma_long_window: int = Field(
+        default=20,
+        gt=0,
+        description="Long rolling-mean window (bars).",
+    )
+    volatility_window: int = Field(
+        default=20,
+        gt=0,
+        description="Rolling standard-deviation window for 1-bar return volatility.",
+    )
+    volume_window: int = Field(
+        default=20,
+        gt=0,
+        description="Rolling window for volume mean and z-score.",
+    )
+    correlation_window: int = Field(
+        default=20,
+        gt=0,
+        description="Rolling window for cross-asset return correlation.",
+    )
+
+
 class SplitConfig(BaseModel):
     """Chronological split fractions for train / validation / test."""
 
@@ -71,6 +109,12 @@ class TrainingConfig(BaseModel):
     artifacts_dir: Path = Field(
         Path("artifacts"),
         description="Root directory for run artifacts.",
+    )
+
+    # --- features ---
+    feature_config: FeatureConfig = Field(
+        default_factory=FeatureConfig,
+        description="Feature engineering windows and parameters.",
     )
 
     # --- credentials ---

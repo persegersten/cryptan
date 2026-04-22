@@ -43,3 +43,13 @@ model_params:
 
 # Root directory for all training run artifacts.
 artifacts_dir: artifacts
+
+# Feature engineering windows.
+# All values are bar counts.  Defaults match the MVP spec; override as needed.
+feature_config:
+  return_windows: [1, 5, 20]
+  ma_short_window: 7
+  ma_long_window: 20
+  volatility_window: 20
+  volume_window: 20
+  correlation_window: 20
