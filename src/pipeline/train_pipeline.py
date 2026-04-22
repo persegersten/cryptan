@@ -15,12 +15,16 @@ From the project root::
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 from src.config.loader import load_config
 from src.config.model import TrainingConfig
+from src.ingestion.market_data import BinanceMarketDataSource
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,9 +54,35 @@ def run(config: TrainingConfig) -> None:
     logger.info("Artifacts dir: %s", config.artifacts_dir)
 
     # ------------------------------------------------------------------
+    # Step 2: Ingest historical OHLCV data for all signal symbols
+    # ------------------------------------------------------------------
+    source = BinanceMarketDataSource(
+        api_key=config.data_api_key,
+        api_secret=config.data_api_secret,
+    )
+
+    start_dt = datetime.datetime.fromisoformat(config.start_date).replace(
+        tzinfo=datetime.timezone.utc
+    )
+    end_dt = datetime.datetime.fromisoformat(config.end_date).replace(
+        tzinfo=datetime.timezone.utc
+    )
+
+    raw_frames: dict[str, pd.DataFrame] = {}
+    for symbol in config.signal_symbols:
+        binance_symbol = f"{symbol}USDT"
+        logger.info("Ingesting %s ...", binance_symbol)
+        raw_frames[symbol] = source.fetch_ohlcv(
+            symbol=binance_symbol,
+            start=start_dt,
+            end=end_dt,
+            timeframe=config.timeframe,
+        )
+        logger.info("Ingested %d bars for %s", len(raw_frames[symbol]), symbol)
+
+    # ------------------------------------------------------------------
     # TODO: wire in the remaining pipeline steps as they are implemented
     # ------------------------------------------------------------------
-    # 1. Ingest historical OHLCV data for all signal symbols
     # 2. Preprocess and merge symbol frames
     # 3. Build features
     # 4. Create target labels for the trading symbol
