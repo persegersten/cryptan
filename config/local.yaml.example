@@ -1,0 +1,16 @@
+# Local development overrides for config/training.yaml.
+#
+# Usage:
+#   cp config/local.yaml.example config/local.yaml
+#   # Edit config/local.yaml to suit your local environment.
+#
+# This file (config/local.yaml) is listed in .gitignore and will never be
+# committed. Use it to shorten date ranges, point to a local artifacts dir,
+# or switch the model during development without touching the committed config.
+
+# Shorter date range speeds up local dev runs.
+start_date: "2023-06-01"
+end_date: "2024-01-01"
+
+# Write artifacts to a temporary directory instead of the repo root.
+artifacts_dir: /tmp/cryptan-artifacts

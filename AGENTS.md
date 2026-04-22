@@ -12,6 +12,16 @@ Default assumptions for the MVP:
 
 These defaults must be easy to change through configuration. Do not hardcode them across the codebase.
 
+## Environment and secrets
+
+- Känsliga värden (API-nycklar etc.) ska **aldrig** finnas i YAML-filer som commitas.
+- Kopiera `.env.example` → `.env` för lokal körning. `.env` är gitignorerad.
+- `config/local.yaml` kan användas för lokala icke-känsliga overrides och är gitignorerad.
+  Kopiera `config/local.yaml.example` → `config/local.yaml` för lokal dev.
+- `config/training.yaml` innehåller bara ML-parametrar och är alltid säker att committa.
+- Om ett krav-env-var (`CRYPTAN_DATA_API_KEY`, `CRYPTAN_DATA_API_SECRET`) saknas eller
+  fortfarande har värdet `changeme` kastas `EnvironmentError` med ett tydligt meddelande.
+
 ## Work style for agents
 When implementing work in this repository:
 1. Make a short plan.

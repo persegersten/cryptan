@@ -43,6 +43,15 @@ Generate Python that is clean, explicit, and easy to extend for the crypto ML MV
 - Keep CLI entry points thin and delegate to pipeline functions.
 - Make it possible to run the MVP locally end-to-end.
 
+## Secrets and environment variables
+
+- Sätt aldrig secrets i YAML-filer som commitas till git.
+- Läs env-vars via `os.environ` i loader-lagret, inte inuti modell-klassen.
+- Kasta `EnvironmentError` (inte `ValueError`) när en obligatorisk env-var saknas eller
+  fortfarande har platshållarvärdet `changeme`.
+- Env-vars injiceras av `load_config()` efter YAML-laddning och före pydantic-validering,
+  så credentials syns aldrig i committade config-filer.
+
 ## Testing expectations
 - Add pytest tests for risky logic.
 - Prefer deterministic synthetic fixtures over external data.
