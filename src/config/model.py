@@ -73,6 +73,28 @@ class TrainingConfig(BaseModel):
         description="Root directory for run artifacts.",
     )
 
+    # --- credentials ---
+    # These fields must be supplied via environment variables (CRYPTAN_DATA_API_KEY
+    # and CRYPTAN_DATA_API_SECRET).  They are injected by the config loader and must
+    # never appear in committed YAML files.
+    data_api_key: str = Field(
+        ...,
+        description="Data provider API key (from CRYPTAN_DATA_API_KEY).",
+    )
+    data_api_secret: str = Field(
+        ...,
+        description="Data provider API secret (from CRYPTAN_DATA_API_SECRET).",
+    )
+
+    @field_validator("data_api_key", "data_api_secret")
+    @classmethod
+    def credential_must_not_be_placeholder(cls, value: str) -> str:
+        if value.strip().lower() in ("", "changeme"):
+            raise ValueError(
+                "API credential is not set — provide a real value via the environment variable."
+            )
+        return value
+
     @field_validator("trading_symbol")
     @classmethod
     def trading_symbol_must_be_non_empty(cls, value: str) -> str:

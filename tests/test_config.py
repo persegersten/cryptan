@@ -31,6 +31,21 @@ MINIMAL_VALID = {
     "end_date": "2024-01-01",
 }
 
+# Real (non-placeholder) credential values used throughout the test suite.
+_TEST_API_KEY = "test-api-key-abc123"
+_TEST_API_SECRET = "test-api-secret-xyz789"
+
+
+# ---------------------------------------------------------------------------
+# Autouse fixture — supply required env vars for every test in this module
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _patch_required_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inject valid credentials so all tests can call load_config freely."""
+    monkeypatch.setenv("CRYPTAN_DATA_API_KEY", _TEST_API_KEY)
+    monkeypatch.setenv("CRYPTAN_DATA_API_SECRET", _TEST_API_SECRET)
+
 
 # ---------------------------------------------------------------------------
 # load_config — file system behaviour
@@ -78,6 +93,89 @@ class TestDefaultConfigFile:
         config = load_config(repo_root / "config" / "training.yaml")
         total = config.split.train + config.split.validation + config.split.test
         assert abs(total - 1.0) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Environment variable and credentials handling
+# ---------------------------------------------------------------------------
+
+class TestEnvVarCredentials:
+    def test_credentials_injected_from_env_vars(self, tmp_path: Path) -> None:
+        config = load_config(write_yaml(tmp_path, MINIMAL_VALID))
+        assert config.data_api_key == _TEST_API_KEY
+        assert config.data_api_secret == _TEST_API_SECRET
+
+    def test_missing_api_key_raises_environment_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("CRYPTAN_DATA_API_KEY", raising=False)
+        with pytest.raises(EnvironmentError, match="CRYPTAN_DATA_API_KEY"):
+            load_config(write_yaml(tmp_path, MINIMAL_VALID))
+
+    def test_missing_api_secret_raises_environment_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("CRYPTAN_DATA_API_SECRET", raising=False)
+        with pytest.raises(EnvironmentError, match="CRYPTAN_DATA_API_SECRET"):
+            load_config(write_yaml(tmp_path, MINIMAL_VALID))
+
+    def test_placeholder_api_key_raises_environment_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CRYPTAN_DATA_API_KEY", "changeme")
+        with pytest.raises(EnvironmentError, match="changeme"):
+            load_config(write_yaml(tmp_path, MINIMAL_VALID))
+
+    def test_placeholder_api_secret_raises_environment_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CRYPTAN_DATA_API_SECRET", "changeme")
+        with pytest.raises(EnvironmentError, match="changeme"):
+            load_config(write_yaml(tmp_path, MINIMAL_VALID))
+
+    def test_empty_api_key_raises_environment_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CRYPTAN_DATA_API_KEY", "")
+        with pytest.raises(EnvironmentError, match="CRYPTAN_DATA_API_KEY"):
+            load_config(write_yaml(tmp_path, MINIMAL_VALID))
+
+
+# ---------------------------------------------------------------------------
+# load_config — local YAML overlay
+# ---------------------------------------------------------------------------
+
+class TestLocalOverlay:
+    def test_local_overlay_overrides_base_value(self, tmp_path: Path) -> None:
+        base = write_yaml(tmp_path, MINIMAL_VALID)
+        local = tmp_path / "local.yaml"
+        local.write_text(yaml.dump({"start_date": "2023-01-01"}), encoding="utf-8")
+        config = load_config(base, local_path=local)
+        assert config.start_date == "2023-01-01"
+
+    def test_local_overlay_missing_file_is_ignored(self, tmp_path: Path) -> None:
+        base = write_yaml(tmp_path, MINIMAL_VALID)
+        config = load_config(base, local_path=tmp_path / "nonexistent_local.yaml")
+        assert config.start_date == MINIMAL_VALID["start_date"]
+
+    def test_no_local_path_argument_uses_base_only(self, tmp_path: Path) -> None:
+        base = write_yaml(tmp_path, MINIMAL_VALID)
+        config = load_config(base)
+        assert config.start_date == MINIMAL_VALID["start_date"]
+
+    def test_local_overlay_cannot_inject_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Credentials in a local YAML file are overwritten by env vars."""
+        base = write_yaml(tmp_path, MINIMAL_VALID)
+        local = tmp_path / "local.yaml"
+        local.write_text(
+            yaml.dump({"data_api_key": "from-yaml-should-be-overwritten"}),
+            encoding="utf-8",
+        )
+        config = load_config(base, local_path=local)
+        # Env var must win over anything in a YAML file.
+        assert config.data_api_key == _TEST_API_KEY
 
 
 # ---------------------------------------------------------------------------

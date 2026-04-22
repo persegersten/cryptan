@@ -137,6 +137,11 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+# .env.example must stay in git (it is the template with changeme placeholders)
+
+# Local config overrides — never commit these
+config/local.yaml
+config/*.local.yaml
 .venv
 env/
 venv/
