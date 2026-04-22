@@ -1,0 +1,21 @@
+# Data source configuration for the ingestion layer.
+#
+# This file configures which market-data provider is used and provider-specific
+# settings (e.g. base URL, request limits).  Credentials are never stored here;
+# they are injected at runtime from environment variables
+# (CRYPTAN_DATA_API_KEY / CRYPTAN_DATA_API_SECRET).
+
+# Which provider adapter to use.  Must match a key in the provider registry.
+# Currently supported: binance
+provider: binance
+
+binance:
+  # REST API base URL.  Override to point at Binance testnet if needed.
+  base_url: https://api.binance.com
+
+  # Maximum number of bars returned in a single /api/v3/klines request.
+  # Binance hard-caps this at 1000; lower values reduce request size.
+  bars_per_request: 1000
+
+  # Seconds to wait between paginated requests to respect rate limits.
+  request_delay_seconds: 0.2
