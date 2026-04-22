@@ -25,6 +25,8 @@ import pandas as pd
 from src.config.loader import load_config
 from src.config.model import TrainingConfig
 from src.ingestion.market_data import BinanceMarketDataSource
+from src.preprocessing.cleaner import clean_market_data
+from src.preprocessing.merger import merge_symbol_frames
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,15 +83,31 @@ def run(config: TrainingConfig) -> None:
         logger.info("Ingested %d bars for %s", len(raw_frames[symbol]), symbol)
 
     # ------------------------------------------------------------------
+    # Step 3: Preprocess each symbol frame and merge into one wide DataFrame
+    # ------------------------------------------------------------------
+    cleaned_frames: dict[str, pd.DataFrame] = {}
+    for symbol, raw_df in raw_frames.items():
+        logger.info("Cleaning %s ...", symbol)
+        cleaned_frames[symbol] = clean_market_data(raw_df)
+        logger.info("Cleaned %d bars for %s", len(cleaned_frames[symbol]), symbol)
+
+    logger.info("Merging %d symbol frame(s) ...", len(cleaned_frames))
+    merged_df = merge_symbol_frames(cleaned_frames)
+    logger.info(
+        "Merged DataFrame: %d rows × %d columns",
+        len(merged_df),
+        len(merged_df.columns),
+    )
+
+    # ------------------------------------------------------------------
     # TODO: wire in the remaining pipeline steps as they are implemented
     # ------------------------------------------------------------------
-    # 2. Preprocess and merge symbol frames
-    # 3. Build features
-    # 4. Create target labels for the trading symbol
-    # 5. Split chronologically (train / validation / test)
-    # 6. Train the configured model
-    # 7. Evaluate with ML metrics and simple backtest
-    # 8. Save model artifact and run metadata
+    # 4. Build features
+    # 5. Create target labels for the trading symbol
+    # 6. Split chronologically (train / validation / test)
+    # 7. Train the configured model
+    # 8. Evaluate with ML metrics and simple backtest
+    # 9. Save model artifact and run metadata
     # ------------------------------------------------------------------
 
     logger.info("=== cryptan training pipeline end ===")
