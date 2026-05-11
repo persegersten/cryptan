@@ -64,6 +64,33 @@ class SplitConfig(BaseModel):
         return self
 
 
+class ModelCandidateConfig(BaseModel):
+    """One candidate estimator to train and score during model selection."""
+
+    name: str | None = Field(
+        default=None,
+        description="Optional stable display name for this candidate.",
+    )
+    model_type: str = Field(
+        ...,
+        description="Model identifier; must match a key in the model registry.",
+    )
+    model_params: dict = Field(
+        default_factory=dict,
+        description="Keyword arguments forwarded to the model constructor.",
+    )
+
+    @field_validator("name", "model_type")
+    @classmethod
+    def candidate_strings_must_be_non_empty(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Model candidate name/model_type must not be empty.")
+        return cleaned
+
+
 class TrainingConfig(BaseModel):
     """Full configuration for one training pipeline run."""
 
@@ -103,6 +130,18 @@ class TrainingConfig(BaseModel):
     model_params: dict = Field(
         default_factory=dict,
         description="Keyword arguments forwarded to the model constructor.",
+    )
+    model_candidates: list[ModelCandidateConfig] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Optional candidate estimators. If supplied, all candidates are trained "
+            "and the best one is selected on validation data."
+        ),
+    )
+    model_selection_metric: str = Field(
+        "f1_macro",
+        description="Validation metric used to select the best model candidate.",
     )
 
     # --- artifacts ---
@@ -165,6 +204,26 @@ class TrainingConfig(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("timeframe must not be empty.")
+        return value
+
+    @field_validator("model_type", "model_selection_metric")
+    @classmethod
+    def model_strings_must_be_non_empty(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("model_type and model_selection_metric must not be empty.")
+        return value
+
+    @field_validator("model_selection_metric")
+    @classmethod
+    def model_selection_metric_must_be_supported(cls, value: str) -> str:
+        supported_metrics = {"accuracy", "precision_macro", "recall_macro", "f1_macro"}
+        if value not in supported_metrics:
+            supported = ", ".join(sorted(supported_metrics))
+            raise ValueError(
+                f"Unsupported model_selection_metric {value!r}. "
+                f"Supported metrics: {supported}."
+            )
         return value
 
     @field_validator("start_date", "end_date")

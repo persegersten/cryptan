@@ -351,3 +351,46 @@ class TestModelConfig:
     def test_default_model_params_is_empty_dict(self, tmp_path: Path) -> None:
         config = load_config(write_yaml(tmp_path, MINIMAL_VALID))
         assert config.model_params == {}
+
+    def test_model_candidates_are_loaded(self, tmp_path: Path) -> None:
+        data = {
+            **MINIMAL_VALID,
+            "model_selection_metric": "accuracy",
+            "model_candidates": [
+                {
+                    "name": "logit",
+                    "model_type": "LogisticRegression",
+                    "model_params": {"max_iter": 500},
+                },
+                {
+                    "name": "forest",
+                    "model_type": "RandomForestClassifier",
+                    "model_params": {"n_estimators": 10, "random_state": 7},
+                },
+            ],
+        }
+
+        config = load_config(write_yaml(tmp_path, data))
+
+        assert config.model_selection_metric == "accuracy"
+        assert config.model_candidates is not None
+        assert [candidate.name for candidate in config.model_candidates] == [
+            "logit",
+            "forest",
+        ]
+        assert config.model_candidates[0].model_params["max_iter"] == 500
+
+    def test_empty_model_selection_metric_raises(self, tmp_path: Path) -> None:
+        data = {**MINIMAL_VALID, "model_selection_metric": " "}
+        with pytest.raises(ValueError):
+            load_config(write_yaml(tmp_path, data))
+
+    def test_unknown_model_selection_metric_raises(self, tmp_path: Path) -> None:
+        data = {**MINIMAL_VALID, "model_selection_metric": "not_a_metric"}
+        with pytest.raises(ValueError, match="Unsupported model_selection_metric"):
+            load_config(write_yaml(tmp_path, data))
+
+    def test_empty_model_candidates_raises(self, tmp_path: Path) -> None:
+        data = {**MINIMAL_VALID, "model_candidates": []}
+        with pytest.raises(ValueError):
+            load_config(write_yaml(tmp_path, data))

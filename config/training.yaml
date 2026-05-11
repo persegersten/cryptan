@@ -32,7 +32,8 @@ split:
   validation: 0.15
   test: 0.15
 
-# Baseline model to use.  Must match a key in the model registry.
+# Baseline model to use when model_candidates is omitted.
+# Must match a key in the model registry.
 model_type: RandomForestClassifier
 
 # Hyper-parameters forwarded to the chosen model constructor.
@@ -40,6 +41,26 @@ model_params:
   n_estimators: 100
   random_state: 42
   n_jobs: -1
+
+# Optional candidate set. When present, the pipeline trains all candidates on
+# the chronological train split and selects the best validation performer.
+model_selection_metric: f1_macro
+model_candidates:
+  - name: logistic_regression
+    model_type: LogisticRegression
+    model_params:
+      max_iter: 1000
+      random_state: 42
+  - name: random_forest
+    model_type: RandomForestClassifier
+    model_params:
+      n_estimators: 100
+      random_state: 42
+      n_jobs: -1
+  - name: hist_gradient_boosting
+    model_type: HistGradientBoostingClassifier
+    model_params:
+      random_state: 42
 
 # Root directory for all training run artifacts.
 artifacts_dir: artifacts
