@@ -114,7 +114,7 @@ def run(config: TrainingConfig) -> None:
     )
 
     # ------------------------------------------------------------------
-    # Step 4b: Create target labels for the configured trading symbol
+    # Step 5: Create target labels for the configured trading symbol
     # ------------------------------------------------------------------
     logger.info("Creating target labels ...")
     labelled_df = add_target_labels(feature_df, config)
@@ -125,7 +125,7 @@ def run(config: TrainingConfig) -> None:
     )
 
     # ------------------------------------------------------------------
-    # Step 5: Split chronologically into train / validation / test
+    # Step 6: Split chronologically into train / validation / test
     # ------------------------------------------------------------------
     logger.info("Splitting labelled data chronologically ...")
     data_split = split_chronologically(labelled_df, config)
@@ -139,9 +139,9 @@ def run(config: TrainingConfig) -> None:
     # ------------------------------------------------------------------
     # TODO: wire in the remaining pipeline steps as they are implemented
     # ------------------------------------------------------------------
-    # 6. Train the configured model
-    # 7. Evaluate with ML metrics and simple backtest
-    # 8. Save model artifact and run metadata
+    # 7. Train the configured model
+    # 8. Evaluate with ML metrics and simple backtest
+    # 9. Save model artifact and run metadata
     # ------------------------------------------------------------------
 
     logger.info("=== cryptan training pipeline end ===")
