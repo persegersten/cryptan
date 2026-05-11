@@ -29,6 +29,7 @@ from src.ingestion.market_data import BinanceMarketDataSource
 from src.labels.target import add_target_labels
 from src.preprocessing.cleaner import clean_market_data
 from src.preprocessing.merger import merge_symbol_frames
+from src.splitting.chronological import split_chronologically
 
 logging.basicConfig(
     level=logging.INFO,
@@ -124,9 +125,20 @@ def run(config: TrainingConfig) -> None:
     )
 
     # ------------------------------------------------------------------
+    # Step 6: Split chronologically into train / validation / test
+    # ------------------------------------------------------------------
+    logger.info("Splitting labelled data chronologically ...")
+    data_split = split_chronologically(labelled_df, config)
+    logger.info(
+        "Split sizes: train=%d, validation=%d, test=%d",
+        len(data_split.train),
+        len(data_split.validation),
+        len(data_split.test),
+    )
+
+    # ------------------------------------------------------------------
     # TODO: wire in the remaining pipeline steps as they are implemented
     # ------------------------------------------------------------------
-    # 6. Split chronologically (train / validation / test)
     # 7. Train the configured model
     # 8. Evaluate with ML metrics and simple backtest
     # 9. Save model artifact and run metadata
