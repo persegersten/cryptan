@@ -24,6 +24,7 @@ import pandas as pd
 
 from src.config.loader import load_config
 from src.config.model import TrainingConfig
+from src.features.builder import build_features
 from src.ingestion.market_data import BinanceMarketDataSource
 from src.preprocessing.cleaner import clean_market_data
 from src.preprocessing.merger import merge_symbol_frames
@@ -100,9 +101,19 @@ def run(config: TrainingConfig) -> None:
     )
 
     # ------------------------------------------------------------------
+    # Step 4: Build features for all configured signal symbols
+    # ------------------------------------------------------------------
+    logger.info("Building features ...")
+    feature_df = build_features(merged_df, config)
+    logger.info(
+        "Feature DataFrame: %d rows × %d columns",
+        len(feature_df),
+        len(feature_df.columns),
+    )
+
+    # ------------------------------------------------------------------
     # TODO: wire in the remaining pipeline steps as they are implemented
     # ------------------------------------------------------------------
-    # 4. Build features
     # 5. Create target labels for the trading symbol
     # 6. Split chronologically (train / validation / test)
     # 7. Train the configured model
