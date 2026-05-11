@@ -26,8 +26,10 @@ from src.config.loader import load_config
 from src.config.model import TrainingConfig
 from src.features.builder import build_features
 from src.ingestion.market_data import BinanceMarketDataSource
+from src.labels.target import add_target_labels
 from src.preprocessing.cleaner import clean_market_data
 from src.preprocessing.merger import merge_symbol_frames
+from src.splitting.chronological import split_chronologically
 
 logging.basicConfig(
     level=logging.INFO,
@@ -112,13 +114,34 @@ def run(config: TrainingConfig) -> None:
     )
 
     # ------------------------------------------------------------------
+    # Step 4b: Create target labels for the configured trading symbol
+    # ------------------------------------------------------------------
+    logger.info("Creating target labels ...")
+    labelled_df = add_target_labels(feature_df, config)
+    logger.info(
+        "Labelled DataFrame: %d rows × %d columns",
+        len(labelled_df),
+        len(labelled_df.columns),
+    )
+
+    # ------------------------------------------------------------------
+    # Step 5: Split chronologically into train / validation / test
+    # ------------------------------------------------------------------
+    logger.info("Splitting labelled data chronologically ...")
+    data_split = split_chronologically(labelled_df, config)
+    logger.info(
+        "Split sizes: train=%d, validation=%d, test=%d",
+        len(data_split.train),
+        len(data_split.validation),
+        len(data_split.test),
+    )
+
+    # ------------------------------------------------------------------
     # TODO: wire in the remaining pipeline steps as they are implemented
     # ------------------------------------------------------------------
-    # 5. Create target labels for the trading symbol
-    # 6. Split chronologically (train / validation / test)
-    # 7. Train the configured model
-    # 8. Evaluate with ML metrics and simple backtest
-    # 9. Save model artifact and run metadata
+    # 6. Train the configured model
+    # 7. Evaluate with ML metrics and simple backtest
+    # 8. Save model artifact and run metadata
     # ------------------------------------------------------------------
 
     logger.info("=== cryptan training pipeline end ===")
