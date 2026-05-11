@@ -476,7 +476,7 @@ class TestAddVolumeFeatures:
         df = pd.DataFrame({"ETH_volume": [10.0] * 30})
         result = add_volume_features(df, "ETH", volume_window=5)
         valid = result["ETH_volume_zscore"].dropna()
-        assert (valid == pytest.approx(0.0)).all()
+        assert valid.tolist() == pytest.approx([0.0] * len(valid))
 
     def test_volume_zscore_formula(self) -> None:
         """z-score at row t = (vol[t] - mean) / std over the window."""
@@ -525,7 +525,7 @@ class TestAddCrossAssetFeatures:
         df = pd.DataFrame({"ETH_close": prices, "BNB_close": prices})
         result = add_cross_asset_features(df, "ETH", "BNB", correlation_window=10)
         valid_corr = result["ETH_BNB_corr"].dropna()
-        assert (valid_corr == pytest.approx(1.0, abs=1e-9)).all()
+        assert valid_corr.tolist() == pytest.approx([1.0] * len(valid_corr), abs=1e-9)
 
     def test_missing_target_close_column_raises(self) -> None:
         df = pd.DataFrame({"BNB_close": [1.0, 2.0]})

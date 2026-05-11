@@ -26,6 +26,7 @@ from src.config.loader import load_config
 from src.config.model import TrainingConfig
 from src.features.builder import build_features
 from src.ingestion.market_data import BinanceMarketDataSource
+from src.labels.target import add_target_labels
 from src.preprocessing.cleaner import clean_market_data
 from src.preprocessing.merger import merge_symbol_frames
 
@@ -112,9 +113,19 @@ def run(config: TrainingConfig) -> None:
     )
 
     # ------------------------------------------------------------------
+    # Step 5: Create target labels for the configured trading symbol
+    # ------------------------------------------------------------------
+    logger.info("Creating target labels ...")
+    labelled_df = add_target_labels(feature_df, config)
+    logger.info(
+        "Labelled DataFrame: %d rows × %d columns",
+        len(labelled_df),
+        len(labelled_df.columns),
+    )
+
+    # ------------------------------------------------------------------
     # TODO: wire in the remaining pipeline steps as they are implemented
     # ------------------------------------------------------------------
-    # 5. Create target labels for the trading symbol
     # 6. Split chronologically (train / validation / test)
     # 7. Train the configured model
     # 8. Evaluate with ML metrics and simple backtest
