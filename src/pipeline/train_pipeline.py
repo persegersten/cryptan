@@ -27,6 +27,7 @@ from src.config.model import TrainingConfig
 from src.features.builder import build_features
 from src.ingestion.market_data import BinanceMarketDataSource
 from src.labels.target import add_target_labels
+from src.models import train_and_select_model
 from src.preprocessing.cleaner import clean_market_data
 from src.preprocessing.merger import merge_symbol_frames
 from src.splitting.chronological import split_chronologically
@@ -55,7 +56,22 @@ def run(config: TrainingConfig) -> None:
         config.start_date,
         config.end_date,
     )
-    logger.info("Model: %s | Params: %s", config.model_type, config.model_params or "{}")
+    if config.model_candidates:
+        candidate_names = [
+            candidate.name or candidate.model_type for candidate in config.model_candidates
+        ]
+        logger.info(
+            "Model candidates: %s | Selection metric: %s",
+            ", ".join(candidate_names),
+            config.model_selection_metric,
+        )
+    else:
+        logger.info(
+            "Model: %s | Params: %s | Selection metric: %s",
+            config.model_type,
+            config.model_params or "{}",
+            config.model_selection_metric,
+        )
     logger.info("Artifacts dir: %s", config.artifacts_dir)
 
     # ------------------------------------------------------------------
@@ -137,9 +153,21 @@ def run(config: TrainingConfig) -> None:
     )
 
     # ------------------------------------------------------------------
+    # Step 7: Train configured candidate model(s) and select the best one
+    # ------------------------------------------------------------------
+    logger.info("Training model candidate(s) ...")
+    model_selection = train_and_select_model(data_split, config)
+    logger.info(
+        "Selected model: %s | Validation %s=%.6f | Features=%d",
+        model_selection.best_candidate.name,
+        model_selection.selection_metric,
+        model_selection.best_candidate.validation_metrics[model_selection.selection_metric],
+        len(model_selection.feature_columns),
+    )
+
+    # ------------------------------------------------------------------
     # TODO: wire in the remaining pipeline steps as they are implemented
     # ------------------------------------------------------------------
-    # 7. Train the configured model
     # 8. Evaluate with ML metrics and simple backtest
     # 9. Save model artifact and run metadata
     # ------------------------------------------------------------------
