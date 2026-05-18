@@ -94,6 +94,20 @@ class TestDefaultConfigFile:
         total = config.split.train + config.split.validation + config.split.test
         assert abs(total - 1.0) < 1e-6
 
+    def test_default_config_includes_expanded_model_candidates(self) -> None:
+        repo_root = Path(__file__).parent.parent
+        config = load_config(repo_root / "config" / "training.yaml")
+
+        assert config.model_candidates is not None
+        assert [candidate.name for candidate in config.model_candidates] == [
+            "logistic_regression",
+            "random_forest",
+            "random_forest_balanced",
+            "extra_trees_balanced",
+            "gradient_boosting",
+            "hist_gradient_boosting",
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Environment variable and credentials handling

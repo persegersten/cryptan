@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import (
+    ExtraTreesClassifier,
+    GradientBoostingClassifier,
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.linear_model import LogisticRegression
 
 
@@ -19,6 +24,8 @@ def build_estimator(model_type: str, model_params: dict[str, Any]) -> object:
     registry = {
         "LogisticRegression": LogisticRegression,
         "RandomForestClassifier": RandomForestClassifier,
+        "ExtraTreesClassifier": ExtraTreesClassifier,
+        "GradientBoostingClassifier": GradientBoostingClassifier,
         "HistGradientBoostingClassifier": HistGradientBoostingClassifier,
     }
     try:
