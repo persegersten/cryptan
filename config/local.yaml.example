@@ -9,8 +9,9 @@
 # or switch the model during development without touching the committed config.
 
 # Shorter date range speeds up local dev runs.
-start_date: "2023-06-01"
-end_date: "2024-01-01"
+# Values are day offsets from today (UTC): -1 is yesterday, 0 is today.
+start_date: -100
+end_date: -1
 
 # Write artifacts to a temporary directory instead of the repo root.
 artifacts_dir: /tmp/cryptan-artifacts

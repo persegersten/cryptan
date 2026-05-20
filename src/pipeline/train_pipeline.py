@@ -15,7 +15,6 @@ From the project root::
 from __future__ import annotations
 
 import argparse
-import datetime
 import logging
 import sys
 from pathlib import Path
@@ -49,7 +48,7 @@ def run(config: TrainingConfig) -> None:
     """
     logger.info("=== cryptan training pipeline start ===")
     logger.info(
-        "Target: %s | Signals: %s | Timeframe: %s | %s → %s",
+        "Target: %s | Signals: %s | Timeframe: %s | Date offsets: %s → %s",
         config.trading_symbol,
         ", ".join(config.signal_symbols),
         config.timeframe,
@@ -82,12 +81,8 @@ def run(config: TrainingConfig) -> None:
         api_secret=config.data_api_secret,
     )
 
-    start_dt = datetime.datetime.fromisoformat(config.start_date).replace(
-        tzinfo=datetime.timezone.utc
-    )
-    end_dt = datetime.datetime.fromisoformat(config.end_date).replace(
-        tzinfo=datetime.timezone.utc
-    )
+    start_dt = config.resolve_start_datetime()
+    end_dt = config.resolve_end_datetime()
 
     raw_frames: dict[str, pd.DataFrame] = {}
     for symbol in config.signal_symbols:

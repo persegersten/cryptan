@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 
 
 class FeatureConfig(BaseModel):
@@ -104,8 +104,20 @@ class TrainingConfig(BaseModel):
 
     # --- data ---
     timeframe: str = Field("1h", description="OHLCV bar interval, e.g. '1h', '4h', '1d'.")
-    start_date: str = Field(..., description="Historical data start date (ISO 8601, UTC).")
-    end_date: str = Field(..., description="Historical data end date (ISO 8601, UTC).")
+    start_date: StrictInt = Field(
+        ...,
+        description=(
+            "Historical data start day as an integer offset from today "
+            "in UTC; -1 is yesterday, 0 is today."
+        ),
+    )
+    end_date: StrictInt = Field(
+        ...,
+        description=(
+            "Historical data end day as an integer offset from today "
+            "in UTC; -1 is yesterday, 0 is today."
+        ),
+    )
 
     # --- labelling ---
     prediction_horizon_bars: int = Field(
@@ -226,23 +238,42 @@ class TrainingConfig(BaseModel):
             )
         return value
 
-    @field_validator("start_date", "end_date")
-    @classmethod
-    def date_must_be_iso_format(cls, value: str) -> str:
-        try:
-            datetime.date.fromisoformat(value)
-        except ValueError as exc:
-            raise ValueError(
-                f"Date must be in ISO 8601 format (YYYY-MM-DD), got {value!r}."
-            ) from exc
-        return value
-
     @model_validator(mode="after")
     def end_date_must_be_after_start_date(self) -> "TrainingConfig":
-        start = datetime.date.fromisoformat(self.start_date)
-        end = datetime.date.fromisoformat(self.end_date)
-        if end <= start:
+        if self.end_date < self.start_date:
             raise ValueError(
-                f"end_date ({self.end_date}) must be strictly after start_date ({self.start_date})."
+                f"end_date ({self.end_date}) must be greater than or equal to "
+                f"start_date ({self.start_date})."
             )
         return self
+
+    def resolve_start_datetime(
+        self,
+        today: datetime.date | None = None,
+    ) -> datetime.datetime:
+        """Resolve ``start_date`` offset to an inclusive UTC midnight."""
+        base_date = today or datetime.datetime.now(datetime.timezone.utc).date()
+        start = base_date + datetime.timedelta(days=self.start_date)
+        return datetime.datetime.combine(
+            start,
+            datetime.time.min,
+            tzinfo=datetime.timezone.utc,
+        )
+
+    def resolve_end_datetime(
+        self,
+        today: datetime.date | None = None,
+    ) -> datetime.datetime:
+        """Resolve ``end_date`` offset to an exclusive UTC boundary.
+
+        The configured integer names the final included calendar day.  The
+        ingestion layer expects an exclusive end timestamp, so the resolved
+        boundary is midnight after that day.
+        """
+        base_date = today or datetime.datetime.now(datetime.timezone.utc).date()
+        end = base_date + datetime.timedelta(days=self.end_date + 1)
+        return datetime.datetime.combine(
+            end,
+            datetime.time.min,
+            tzinfo=datetime.timezone.utc,
+        )

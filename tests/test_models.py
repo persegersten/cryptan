@@ -39,8 +39,8 @@ def _make_config(
         trading_symbol="ETH",
         signal_symbols=["ETH"],
         timeframe="1h",
-        start_date="2022-01-01",
-        end_date="2024-01-01",
+        start_date=-365,
+        end_date=-1,
         model_selection_metric=metric,
         model_candidates=candidates
         or [
@@ -134,8 +134,8 @@ class TestTrainAndSelectModel:
             trading_symbol="ETH",
             signal_symbols=["ETH"],
             timeframe="1h",
-            start_date="2022-01-01",
-            end_date="2024-01-01",
+            start_date=-365,
+            end_date=-1,
             model_type="SignClassifier",
             model_params={"unused": 1},
             model_selection_metric="accuracy",

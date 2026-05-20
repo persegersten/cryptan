@@ -22,9 +22,10 @@ prediction_horizon_bars: 12
 # Returns smaller than this threshold in absolute value are labelled 0 (neutral).
 return_threshold: 0.01
 
-# Historical date range for data collection (ISO 8601, UTC implied).
-start_date: "2022-01-01"
-end_date: "2024-01-01"
+# Historical date range for data collection as day offsets from today (UTC).
+# -1 is yesterday, 0 is today. The end day is included by the pipeline.
+start_date: -365
+end_date: -1
 
 # Chronological split fractions; must sum to 1.0.
 split:

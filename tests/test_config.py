@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import textwrap
 from pathlib import Path
 
@@ -27,8 +28,8 @@ MINIMAL_VALID = {
     "trading_symbol": "ETH",
     "signal_symbols": ["ETH", "BNB", "SOL"],
     "timeframe": "1h",
-    "start_date": "2022-01-01",
-    "end_date": "2024-01-01",
+    "start_date": -365,
+    "end_date": -1,
 }
 
 # Real (non-placeholder) credential values used throughout the test suite.
@@ -163,9 +164,9 @@ class TestLocalOverlay:
     def test_local_overlay_overrides_base_value(self, tmp_path: Path) -> None:
         base = write_yaml(tmp_path, MINIMAL_VALID)
         local = tmp_path / "local.yaml"
-        local.write_text(yaml.dump({"start_date": "2023-01-01"}), encoding="utf-8")
+        local.write_text(yaml.dump({"start_date": -100}), encoding="utf-8")
         config = load_config(base, local_path=local)
-        assert config.start_date == "2023-01-01"
+        assert config.start_date == -100
 
     def test_local_overlay_missing_file_is_ignored(self, tmp_path: Path) -> None:
         base = write_yaml(tmp_path, MINIMAL_VALID)
@@ -248,29 +249,42 @@ class TestSignalSymbolsValidation:
 
 
 # ---------------------------------------------------------------------------
-# TrainingConfig — date validation
+# TrainingConfig — relative date offset validation
 # ---------------------------------------------------------------------------
 
 class TestDateValidation:
     def test_valid_date_range_loads(self, tmp_path: Path) -> None:
         config = load_config(write_yaml(tmp_path, MINIMAL_VALID))
-        assert config.start_date == "2022-01-01"
-        assert config.end_date == "2024-01-01"
+        assert config.start_date == -365
+        assert config.end_date == -1
 
     def test_end_date_before_start_date_raises(self, tmp_path: Path) -> None:
-        data = {**MINIMAL_VALID, "start_date": "2024-01-01", "end_date": "2022-01-01"}
+        data = {**MINIMAL_VALID, "start_date": -1, "end_date": -365}
         with pytest.raises(ValueError, match="end_date"):
             load_config(write_yaml(tmp_path, data))
 
-    def test_same_start_and_end_date_raises(self, tmp_path: Path) -> None:
-        data = {**MINIMAL_VALID, "start_date": "2023-01-01", "end_date": "2023-01-01"}
-        with pytest.raises(ValueError, match="end_date"):
-            load_config(write_yaml(tmp_path, data))
+    def test_same_start_and_end_date_is_one_included_day(self, tmp_path: Path) -> None:
+        data = {**MINIMAL_VALID, "start_date": -1, "end_date": -1}
+        config = load_config(write_yaml(tmp_path, data))
+        assert config.start_date == -1
+        assert config.end_date == -1
 
-    def test_invalid_date_format_raises(self, tmp_path: Path) -> None:
+    def test_non_integer_date_offset_raises(self, tmp_path: Path) -> None:
         data = {**MINIMAL_VALID, "start_date": "01/01/2022"}
         with pytest.raises(ValueError):
             load_config(write_yaml(tmp_path, data))
+
+    def test_date_offsets_resolve_against_utc_today(self, tmp_path: Path) -> None:
+        data = {**MINIMAL_VALID, "start_date": -365, "end_date": -1}
+        config = load_config(write_yaml(tmp_path, data))
+        today = datetime.date(2026, 5, 20)
+
+        assert config.resolve_start_datetime(today) == datetime.datetime(
+            2025, 5, 20, tzinfo=datetime.timezone.utc
+        )
+        assert config.resolve_end_datetime(today) == datetime.datetime(
+            2026, 5, 20, tzinfo=datetime.timezone.utc
+        )
 
 
 # ---------------------------------------------------------------------------

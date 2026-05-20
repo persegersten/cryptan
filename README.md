@@ -13,6 +13,7 @@ cp .env.example .env
 # (Valfritt) Lokal config override — kortare datumspann, annan artifacts-sökväg etc.
 cp config/local.yaml.example config/local.yaml
 # Justera config/local.yaml efter behov
+# Datumspann anges som dag-offsets från idag UTC: -1 = igår, 0 = idag.
 
 # Kör pipeline
 python -m src.pipeline.train_pipeline --config config/training.yaml
