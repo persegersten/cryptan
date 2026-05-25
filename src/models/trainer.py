@@ -1,19 +1,24 @@
-"""Train configured model candidates and select the best validation performer."""
+"""Train configured model candidates and select the best validation backtest."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import math
 from typing import Any
 
 import pandas as pd
 from sklearn.base import BaseEstimator
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from src.config.model import ModelCandidateConfig, TrainingConfig
+from src.evaluation.metrics import EXECUTION_LAG_BARS, RETURN_OVER_DRAWDOWN_METRIC
+from src.evaluation.metrics import backtest_metrics, classification_metrics
+from src.evaluation.metrics import has_only_finite_numbers
+from src.evaluation.metrics import validation_return_over_drawdown_score
+from src.evaluation.metrics import validation_risk_filter_rejection_reason
 from src.labels.target import TARGET_LABEL_COLUMN, TARGET_RETURN_COLUMN
 from src.models.registry import build_estimator
 from src.splitting.chronological import ChronologicalSplit
@@ -35,14 +40,17 @@ class CandidateTrainingResult:
     model_type: str
     model_params: dict[str, Any]
     estimator: BaseEstimator
-    validation_metrics: dict[str, float]
+    validation_metrics: dict[str, Any]
+    validation_backtest_metrics: dict[str, Any]
+    validation_score: float
+    rejection_reason: str | None = None
 
 
 @dataclass(frozen=True)
 class ModelSelectionResult:
     """Best model plus all candidate validation scores."""
 
-    best_candidate: CandidateTrainingResult
+    best_candidate: CandidateTrainingResult | None
     candidates: list[CandidateTrainingResult]
     feature_columns: list[str]
     selection_metric: str
@@ -50,17 +58,46 @@ class ModelSelectionResult:
     @property
     def estimator(self) -> BaseEstimator:
         """Return the selected fitted estimator."""
+        if self.best_candidate is None:
+            raise ValueError("No eligible model candidate was selected.")
         return self.best_candidate.estimator
+
+    @property
+    def eligible_candidates(self) -> list[CandidateTrainingResult]:
+        """Return candidates that passed validation risk filters."""
+        return [
+            candidate
+            for candidate in self.candidates
+            if math.isfinite(candidate.validation_score)
+            and candidate.rejection_reason is None
+        ]
+
+    @property
+    def eligible_candidate_count(self) -> int:
+        """Return the number of candidates eligible for selection."""
+        return len(self.eligible_candidates)
+
+    @property
+    def rejected_candidate_count(self) -> int:
+        """Return the number of rejected candidates."""
+        return len(self.candidates) - self.eligible_candidate_count
+
+    @property
+    def model_selection_status(self) -> str:
+        """Return model selection status for reporting."""
+        if self.best_candidate is None:
+            return "no_eligible_model"
+        return "selected"
 
 
 def train_and_select_model(
     data_split: ChronologicalSplit,
     config: TrainingConfig,
 ) -> ModelSelectionResult:
-    """Train configured candidates and select the best validation model.
+    """Train candidates and select the best validation backtest performer.
 
     The function fits each candidate on the chronological train partition and
-    scores it on the validation partition. It does not use test rows.
+    scores it using validation predictions only. It does not use test rows.
     """
     feature_columns = _select_feature_columns(data_split.train)
     candidates = _candidate_configs(config)
@@ -83,15 +120,20 @@ def train_and_select_model(
             data_split.train[TARGET_LABEL_COLUMN],
         )
         predictions = estimator.predict(data_split.validation[feature_columns])
-        metrics = _classification_metrics(
+        metrics = classification_metrics(
             data_split.validation[TARGET_LABEL_COLUMN],
             predictions,
+        )
+        validation_backtest, validation_score, rejection_reason = _score_validation_backtest(
+            predictions=predictions,
+            validation=data_split.validation,
+            transaction_fee=config.backtest.transaction_fee,
         )
         logger.info(
             "Candidate %s validation %s=%.6f",
             name,
-            config.model_selection_metric,
-            _metric_value(metrics, config.model_selection_metric),
+            RETURN_OVER_DRAWDOWN_METRIC,
+            validation_score,
         )
         results.append(
             CandidateTrainingResult(
@@ -100,27 +142,33 @@ def train_and_select_model(
                 model_params=dict(candidate.model_params),
                 estimator=estimator,
                 validation_metrics=metrics,
+                validation_backtest_metrics=validation_backtest,
+                validation_score=validation_score,
+                rejection_reason=rejection_reason,
             )
         )
 
-    best = max(
-        results,
-        key=lambda result: _metric_value(
-            result.validation_metrics,
-            config.model_selection_metric,
-        ),
-    )
-    logger.info(
-        "Selected model candidate: %s (%s=%.6f)",
-        best.name,
-        config.model_selection_metric,
-        _metric_value(best.validation_metrics, config.model_selection_metric),
-    )
+    eligible_candidates = [
+        result
+        for result in results
+        if math.isfinite(result.validation_score) and result.rejection_reason is None
+    ]
+    best = None
+    if eligible_candidates:
+        best = max(eligible_candidates, key=lambda result: result.validation_score)
+        logger.info(
+            "Selected model candidate: %s (%s=%.6f)",
+            best.name,
+            RETURN_OVER_DRAWDOWN_METRIC,
+            best.validation_score,
+        )
+    else:
+        logger.warning("No model candidate passed validation risk filters.")
     return ModelSelectionResult(
         best_candidate=best,
         candidates=results,
         feature_columns=feature_columns,
-        selection_metric=config.model_selection_metric,
+        selection_metric=RETURN_OVER_DRAWDOWN_METRIC,
     )
 
 
@@ -156,28 +204,54 @@ def _build_pipeline(candidate: ModelCandidateConfig) -> Pipeline:
     return Pipeline(steps)
 
 
-def _classification_metrics(
-    y_true: pd.Series,
-    y_pred: object,
-) -> dict[str, float]:
-    return {
-        "accuracy": float(accuracy_score(y_true, y_pred)),
-        "precision_macro": float(
-            precision_score(y_true, y_pred, average="macro", zero_division=0)
-        ),
-        "recall_macro": float(
-            recall_score(y_true, y_pred, average="macro", zero_division=0)
-        ),
-        "f1_macro": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
-    }
-
-
-def _metric_value(metrics: dict[str, float], metric_name: str) -> float:
+def _score_validation_backtest(
+    *,
+    predictions: object,
+    validation: pd.DataFrame,
+    transaction_fee: float,
+) -> tuple[dict[str, Any], float, str | None]:
     try:
-        return metrics[metric_name]
-    except KeyError as exc:
-        supported = ", ".join(sorted(metrics))
-        raise ValueError(
-            f"Unsupported model_selection_metric {metric_name!r}. "
-            f"Supported metrics: {supported}."
-        ) from exc
+        metrics = backtest_metrics(
+            predictions=predictions,
+            future_returns=validation[TARGET_RETURN_COLUMN],
+            transaction_fee=transaction_fee,
+        )
+    except Exception as exc:
+        logger.warning("Validation backtest failed; assigning -inf score: %s", exc)
+        return (
+            _failed_validation_backtest_metrics(str(exc)),
+            -math.inf,
+            "validation_backtest_failed",
+        )
+
+    if not has_only_finite_numbers(metrics):
+        logger.warning("Validation backtest produced NaN/inf; assigning -inf score.")
+        return metrics, -math.inf, "validation_backtest_non_finite"
+
+    rejection_reason = validation_risk_filter_rejection_reason(metrics)
+    if rejection_reason is not None:
+        logger.info(
+            "Validation backtest rejected by risk filter %s; assigning -inf score.",
+            rejection_reason,
+        )
+        return metrics, -math.inf, rejection_reason
+
+    score = validation_return_over_drawdown_score(metrics)
+    return metrics, score, None
+
+
+def _failed_validation_backtest_metrics(error: str) -> dict[str, Any]:
+    return {
+        "transaction_fee": None,
+        "bars": 0,
+        "traded_bars": 0,
+        "mean_strategy_return": None,
+        "strategy_return_sum": None,
+        "cumulative_return": 0.0,
+        "benchmark_cumulative_return": None,
+        "hit_rate": None,
+        "max_drawdown": 0.0,
+        "turnover": 0.0,
+        "execution_lag_bars": EXECUTION_LAG_BARS,
+        "error": error,
+    }

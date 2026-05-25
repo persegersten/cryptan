@@ -9,19 +9,16 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
-from sklearn.metrics import precision_score, recall_score
 
 from src.config.model import TrainingConfig
+from src.evaluation.metrics import EXECUTION_LAG_BARS
+from src.evaluation.metrics import backtest_metrics, classification_metrics
 from src.labels.target import TARGET_LABEL_COLUMN, TARGET_RETURN_COLUMN
 from src.models.trainer import ModelSelectionResult
 from src.splitting.chronological import ChronologicalSplit
 
 logger = logging.getLogger(__name__)
-
-CLASS_LABELS = [-1, 0, 1]
 
 
 @dataclass(frozen=True)
@@ -59,6 +56,17 @@ def evaluate_model(
     if data_split.test.empty:
         raise ValueError("Test partition is empty; cannot evaluate selected model.")
 
+    if model_selection.best_candidate is None:
+        return {
+            "run_metadata": _run_metadata(data_split, config, model_selection),
+            "ml_metrics": None,
+            "backtest_metrics": _cash_baseline_metrics(len(data_split.test)),
+            "validation_candidates": [
+                _candidate_report(candidate)
+                for candidate in model_selection.candidates
+            ],
+        }
+
     missing_features = [
         column
         for column in model_selection.feature_columns
@@ -85,89 +93,38 @@ def evaluate_model(
 
     return {
         "run_metadata": _run_metadata(data_split, config, model_selection),
-        "ml_metrics": _classification_metrics(y_true, predictions),
-        "backtest_metrics": _backtest_metrics(
+        "ml_metrics": classification_metrics(y_true, predictions),
+        "backtest_metrics": backtest_metrics(
             predictions=predictions,
             future_returns=future_returns,
             transaction_fee=config.backtest.transaction_fee,
         ),
         "validation_candidates": [
-            {
-                "name": candidate.name,
-                "model_type": candidate.model_type,
-                "validation_metrics": candidate.validation_metrics,
-            }
+            _candidate_report(candidate)
             for candidate in model_selection.candidates
         ],
     }
 
 
-def _classification_metrics(
-    y_true: pd.Series,
-    predictions: object,
-) -> dict[str, Any]:
-    matrix = confusion_matrix(y_true, predictions, labels=CLASS_LABELS)
-    return {
-        "accuracy": float(accuracy_score(y_true, predictions)),
-        "precision_macro": float(
-            precision_score(y_true, predictions, average="macro", zero_division=0)
-        ),
-        "recall_macro": float(
-            recall_score(y_true, predictions, average="macro", zero_division=0)
-        ),
-        "f1_macro": float(
-            f1_score(y_true, predictions, average="macro", zero_division=0)
-        ),
-        "confusion_matrix": {
-            "labels": CLASS_LABELS,
-            "matrix": matrix.astype(int).tolist(),
-        },
-        "support": {
-            str(label): int((y_true == label).sum())
-            for label in CLASS_LABELS
-        },
+def _candidate_report(candidate: object) -> dict[str, Any]:
+    payload = {
+        "name": candidate.name,
+        "model_type": candidate.model_type,
+        "validation_metrics": candidate.validation_metrics,
+        "validation_backtest_metrics": candidate.validation_backtest_metrics,
+        "validation_cumulative_return": candidate.validation_backtest_metrics[
+            "cumulative_return"
+        ],
+        "validation_max_drawdown": candidate.validation_backtest_metrics[
+            "max_drawdown"
+        ],
+        "validation_turnover": candidate.validation_backtest_metrics["turnover"],
+        "validation_traded_bars": candidate.validation_backtest_metrics["traded_bars"],
+        "validation_score": candidate.validation_score,
     }
-
-
-def _backtest_metrics(
-    *,
-    predictions: object,
-    future_returns: pd.Series,
-    transaction_fee: float,
-) -> dict[str, Any]:
-    positions = pd.Series(
-        np.asarray(predictions, dtype=float),
-        index=future_returns.index,
-    )
-    realized_returns = future_returns.astype(float)
-    gross_strategy_returns = positions * realized_returns
-    turnover = positions.diff().abs().fillna(positions.abs())
-    net_strategy_returns = gross_strategy_returns - (turnover * transaction_fee)
-    equity_curve = (1.0 + net_strategy_returns).cumprod()
-
-    traded = positions != 0
-    hit_rate = 0.0
-    if traded.any():
-        hit_rate = float((gross_strategy_returns[traded] > 0.0).mean())
-
-    return {
-        "transaction_fee": float(transaction_fee),
-        "bars": int(len(net_strategy_returns)),
-        "traded_bars": int(traded.sum()),
-        "mean_strategy_return": float(net_strategy_returns.mean()),
-        "strategy_return_sum": float(net_strategy_returns.sum()),
-        "cumulative_return": float(equity_curve.iloc[-1] - 1.0),
-        "benchmark_cumulative_return": float((1.0 + realized_returns).prod() - 1.0),
-        "hit_rate": hit_rate,
-        "max_drawdown": _max_drawdown(equity_curve),
-        "turnover": float(turnover.sum()),
-    }
-
-
-def _max_drawdown(equity_curve: pd.Series) -> float:
-    running_peak = equity_curve.cummax()
-    drawdown = (equity_curve / running_peak) - 1.0
-    return float(drawdown.min())
+    if candidate.rejection_reason is not None:
+        payload["rejection_reason"] = candidate.rejection_reason
+    return payload
 
 
 def _run_metadata(
@@ -176,27 +133,79 @@ def _run_metadata(
     model_selection: ModelSelectionResult,
 ) -> dict[str, Any]:
     test = data_split.test
+    raw_counts = data_split.raw_row_counts or data_split.row_counts
+    selected_model = None
+    if model_selection.best_candidate is not None:
+        selected_model = {
+            "name": model_selection.best_candidate.name,
+            "model_type": model_selection.best_candidate.model_type,
+            "selection_metric": model_selection.selection_metric,
+            "validation_metric_value": model_selection.best_candidate.validation_score,
+            "validation_cumulative_return": (
+                model_selection.best_candidate.validation_backtest_metrics[
+                    "cumulative_return"
+                ]
+            ),
+            "validation_max_drawdown": (
+                model_selection.best_candidate.validation_backtest_metrics[
+                    "max_drawdown"
+                ]
+            ),
+            "validation_turnover": (
+                model_selection.best_candidate.validation_backtest_metrics[
+                    "turnover"
+                ]
+            ),
+        }
     return {
         "created_at_utc": _utc_now().isoformat(),
         "trading_symbol": config.trading_symbol,
         "signal_symbols": config.signal_symbols,
         "timeframe": config.timeframe,
         "prediction_horizon_bars": config.prediction_horizon_bars,
+        "execution_lag_bars": EXECUTION_LAG_BARS,
+        "label_generation": "split_local",
+        "model_selection_status": model_selection.model_selection_status,
+        "risk_filters_applied": True,
+        "rejected_candidate_count": model_selection.rejected_candidate_count,
+        "eligible_candidate_count": model_selection.eligible_candidate_count,
+        "trading_enabled": model_selection.best_candidate is not None,
+        "no_trade_reason": (
+            None
+            if model_selection.best_candidate is not None
+            else "No candidate passed validation risk filters"
+        ),
         "return_threshold": config.return_threshold,
-        "selected_model": {
-            "name": model_selection.best_candidate.name,
-            "model_type": model_selection.best_candidate.model_type,
-            "selection_metric": model_selection.selection_metric,
-            "validation_metric_value": model_selection.best_candidate.validation_metrics[
-                model_selection.selection_metric
-            ],
-        },
+        "selected_model": selected_model,
         "feature_count": len(model_selection.feature_columns),
         "split_row_counts": data_split.row_counts,
+        "train_rows_raw": raw_counts["train"],
+        "train_rows_labelled": len(data_split.train),
+        "validation_rows_raw": raw_counts["validation"],
+        "validation_rows_labelled": len(data_split.validation),
+        "test_rows_raw": raw_counts["test"],
+        "test_rows_labelled": len(data_split.test),
         "test_period": {
             "start": _timestamp_to_iso(test["timestamp"].iloc[0]),
             "end": _timestamp_to_iso(test["timestamp"].iloc[-1]),
         },
+    }
+
+
+def _cash_baseline_metrics(bars: int) -> dict[str, Any]:
+    return {
+        "transaction_fee": 0.0,
+        "bars": int(bars),
+        "traded_bars": 0,
+        "mean_strategy_return": 0.0,
+        "strategy_return_sum": 0.0,
+        "cumulative_return": 0.0,
+        "benchmark_cumulative_return": None,
+        "hit_rate": 0.0,
+        "max_drawdown": 0.0,
+        "turnover": 0.0,
+        "execution_lag_bars": EXECUTION_LAG_BARS,
+        "baseline": "cash",
     }
 
 

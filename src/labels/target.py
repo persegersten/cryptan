@@ -28,6 +28,8 @@ TARGET_LABEL_COLUMN = "target_label"
 def add_target_labels(
     feature_df: pd.DataFrame,
     config: TrainingConfig,
+    *,
+    allow_empty: bool = False,
 ) -> pd.DataFrame:
     """Add multiclass target labels for ``config.trading_symbol``.
 
@@ -93,7 +95,7 @@ def add_target_labels(
             horizon,
         )
 
-    if df.empty:
+    if df.empty and not allow_empty:
         raise ValueError(
             "Labelled DataFrame is empty after dropping rows without a full future horizon. "
             "The input series may be too short for prediction_horizon_bars."
@@ -110,4 +112,3 @@ def add_target_labels(
     )
 
     return df
-

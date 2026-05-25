@@ -20,6 +20,7 @@ from src.labels.target import (
     TARGET_RETURN_COLUMN,
     add_target_labels,
 )
+from src.splitting.chronological import split_features_chronologically
 
 
 _API_KEY = "test-api-key-abc123"
@@ -31,6 +32,7 @@ def _make_config(
     signal_symbols: list[str] | None = None,
     horizon: int = 2,
     threshold: float = 0.05,
+    split: dict[str, float] | None = None,
 ) -> TrainingConfig:
     """Build a minimal TrainingConfig for target-label tests."""
     return TrainingConfig(
@@ -41,6 +43,7 @@ def _make_config(
         end_date=-1,
         prediction_horizon_bars=horizon,
         return_threshold=threshold,
+        split=split or {"train": 0.70, "validation": 0.15, "test": 0.15},
         data_api_key=_API_KEY,
         data_api_secret=_API_SECRET,
     )
@@ -149,6 +152,40 @@ class TestAddTargetLabelsTimeSeriesSafety:
         assert TARGET_LABEL_COLUMN not in df.columns
         assert TARGET_RETURN_COLUMN not in df.columns
 
+    def test_split_local_labels_do_not_cross_partition_boundaries(self) -> None:
+        df = _make_feature_df(
+            [
+                100.0,
+                101.0,
+                102.0,
+                103.0,
+                1_000.0,
+                1_100.0,
+                1_200.0,
+                1_300.0,
+                1_000_000.0,
+                1_100_000.0,
+                1_200_000.0,
+                1_300_000.0,
+            ]
+        )
+        config = _make_config(
+            horizon=3,
+            threshold=0.01,
+            split={"train": 0.50, "validation": 0.25, "test": 0.25},
+        )
+
+        raw_split = split_features_chronologically(df, config)
+        train = add_target_labels(raw_split.train, config, allow_empty=True)
+        validation = add_target_labels(raw_split.validation, config, allow_empty=True)
+
+        assert len(raw_split.train) == 6
+        assert len(raw_split.validation) == 3
+        assert len(raw_split.test) == 3
+        assert len(train) == 3
+        assert train["timestamp"].max() == raw_split.train["timestamp"].iloc[-4]
+        assert validation.empty
+
 
 # ---------------------------------------------------------------------------
 # add_target_labels — error guards
@@ -183,4 +220,3 @@ class TestAddTargetLabelsErrorGuards:
 
         with pytest.raises(ValueError, match="empty"):
             add_target_labels(df, config)
-
