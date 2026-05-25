@@ -64,6 +64,19 @@ class SplitConfig(BaseModel):
         return self
 
 
+class BacktestConfig(BaseModel):
+    """Simple strategy backtest parameters."""
+
+    transaction_fee: float = Field(
+        0.001,
+        ge=0.0,
+        description=(
+            "Fractional fee charged for each unit of position turnover, "
+            "e.g. 0.001 is 10 bps."
+        ),
+    )
+
+
 class ModelCandidateConfig(BaseModel):
     """One candidate estimator to train and score during model selection."""
 
@@ -133,6 +146,9 @@ class TrainingConfig(BaseModel):
 
     # --- split ---
     split: SplitConfig = Field(default_factory=SplitConfig)
+
+    # --- evaluation / backtest ---
+    backtest: BacktestConfig = Field(default_factory=BacktestConfig)
 
     # --- model ---
     model_type: str = Field(

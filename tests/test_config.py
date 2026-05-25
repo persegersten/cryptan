@@ -109,6 +109,12 @@ class TestDefaultConfigFile:
             "hist_gradient_boosting",
         ]
 
+    def test_default_config_includes_backtest_fee(self) -> None:
+        repo_root = Path(__file__).parent.parent
+        config = load_config(repo_root / "config" / "training.yaml")
+
+        assert config.backtest.transaction_fee == 0.001
+
 
 # ---------------------------------------------------------------------------
 # Environment variable and credentials handling
