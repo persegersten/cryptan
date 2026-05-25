@@ -145,6 +145,10 @@ celerybeat.pid
 # Local config overrides — never commit these
 config/local.yaml
 config/*.local.yaml
+
+# Pipeline run outputs
+artifacts/
+
 .venv
 env/
 venv/
