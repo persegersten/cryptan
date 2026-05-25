@@ -33,6 +33,11 @@ split:
   validation: 0.15
   test: 0.15
 
+# Simple backtest settings used for evaluation reports.
+# transaction_fee is charged on position turnover; 0.001 = 10 bps.
+backtest:
+  transaction_fee: 0.001
+
 # Baseline model to use when model_candidates is omitted.
 # Must match a key in the model registry.
 model_type: RandomForestClassifier

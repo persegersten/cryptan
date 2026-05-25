@@ -23,6 +23,7 @@ import pandas as pd
 
 from src.config.loader import load_config
 from src.config.model import TrainingConfig
+from src.evaluation import evaluate_and_save_report
 from src.features.builder import build_features
 from src.ingestion.market_data import BinanceMarketDataSource
 from src.labels.target import add_target_labels
@@ -161,10 +162,14 @@ def run(config: TrainingConfig) -> None:
     )
 
     # ------------------------------------------------------------------
-    # TODO: wire in the remaining pipeline steps as they are implemented
+    # Step 8: Evaluate with ML metrics and a simple backtest report
     # ------------------------------------------------------------------
-    # 8. Evaluate with ML metrics and simple backtest
-    # 9. Save model artifact and run metadata
+    logger.info("Evaluating selected model on test split ...")
+    evaluation = evaluate_and_save_report(model_selection, data_split, config)
+    logger.info("Evaluation report saved to %s", evaluation.report_path)
+
+    # ------------------------------------------------------------------
+    # TODO: wire in model artifact persistence when pipeline step 9 is implemented
     # ------------------------------------------------------------------
 
     logger.info("=== cryptan training pipeline end ===")
