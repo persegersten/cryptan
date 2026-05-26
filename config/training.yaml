@@ -34,9 +34,14 @@ split:
   test: 0.15
 
 # Simple backtest settings used for evaluation reports.
-# transaction_fee is charged on position turnover; 0.001 = 10 bps.
+# all_in_long_cash treats BUY as long ETH, SELL as cash, and HOLD as keeping
+# the previous portfolio state. transaction_fee is charged on executed turnover.
 backtest:
+  portfolio_mode: all_in_long_cash
+  initial_position: 0
   transaction_fee: 0.001
+  max_validation_drawdown: -0.85
+  max_validation_turnover: 250.0
 
 # Baseline model to use when model_candidates is omitted.
 # Must match a key in the model registry.

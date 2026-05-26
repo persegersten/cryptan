@@ -127,7 +127,7 @@ def train_and_select_model(
         validation_backtest, validation_score, rejection_reason = _score_validation_backtest(
             predictions=predictions,
             validation=data_split.validation,
-            transaction_fee=config.backtest.transaction_fee,
+            config=config,
         )
         logger.info(
             "Candidate %s validation %s=%.6f",
@@ -208,13 +208,15 @@ def _score_validation_backtest(
     *,
     predictions: object,
     validation: pd.DataFrame,
-    transaction_fee: float,
+    config: TrainingConfig,
 ) -> tuple[dict[str, Any], float, str | None]:
     try:
         metrics = backtest_metrics(
             predictions=predictions,
             future_returns=validation[TARGET_RETURN_COLUMN],
-            transaction_fee=transaction_fee,
+            transaction_fee=config.backtest.transaction_fee,
+            initial_position=config.backtest.initial_position,
+            portfolio_mode=config.backtest.portfolio_mode,
         )
     except Exception as exc:
         logger.warning("Validation backtest failed; assigning -inf score: %s", exc)
@@ -228,7 +230,11 @@ def _score_validation_backtest(
         logger.warning("Validation backtest produced NaN/inf; assigning -inf score.")
         return metrics, -math.inf, "validation_backtest_non_finite"
 
-    rejection_reason = validation_risk_filter_rejection_reason(metrics)
+    rejection_reason = validation_risk_filter_rejection_reason(
+        metrics,
+        max_validation_drawdown=config.backtest.max_validation_drawdown,
+        max_validation_turnover=config.backtest.max_validation_turnover,
+    )
     if rejection_reason is not None:
         logger.info(
             "Validation backtest rejected by risk filter %s; assigning -inf score.",

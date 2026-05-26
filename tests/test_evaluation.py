@@ -12,6 +12,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 
 from src.config.model import TrainingConfig
 from src.evaluation.metrics import RETURN_OVER_DRAWDOWN_METRIC, backtest_metrics
+from src.evaluation.metrics import signals_to_target_positions
 from src.evaluation import evaluate_and_save_report, evaluate_model
 from src.labels.target import TARGET_LABEL_COLUMN, TARGET_RETURN_COLUMN
 from src.models.trainer import CandidateTrainingResult, ModelSelectionResult
@@ -125,13 +126,17 @@ class TestEvaluateModel:
         ]
         assert report["backtest_metrics"]["transaction_fee"] == 0.01
         assert report["backtest_metrics"]["traded_bars"] == 2
+        assert report["backtest_metrics"]["exposure_ratio"] == pytest.approx(0.5)
         assert report["backtest_metrics"]["hit_rate"] == pytest.approx(0.5)
-        assert report["backtest_metrics"]["turnover"] == 3.0
-        assert report["backtest_metrics"]["strategy_return_sum"] == pytest.approx(0.02)
+        assert report["backtest_metrics"]["turnover"] == 2.0
+        assert report["backtest_metrics"]["strategy_return_sum"] == pytest.approx(0.13)
         assert report["backtest_metrics"]["cumulative_return"] == pytest.approx(
-            (1.0 * 0.94 * 0.99 * 1.09) - 1.0
+            (1.0 * 0.94 * 1.20 * 0.99) - 1.0
         )
         assert report["backtest_metrics"]["execution_lag_bars"] == 1
+        assert report["backtest_metrics"]["executed_position_min"] == 0.0
+        assert report["backtest_metrics"]["executed_position_max"] == 1.0
+        assert report["backtest_metrics"]["executed_positions_are_long_cash"] is True
         selected_model = report["run_metadata"]["selected_model"]
         assert selected_model["name"] == "fixed"
         assert selected_model["selection_metric"] == RETURN_OVER_DRAWDOWN_METRIC
@@ -140,6 +145,14 @@ class TestEvaluateModel:
         assert selected_model["validation_max_drawdown"] == -0.03
         assert selected_model["validation_turnover"] == 2.0
         assert report["run_metadata"]["execution_lag_bars"] == 1
+        assert report["run_metadata"]["portfolio_mode"] == "all_in_long_cash"
+        assert report["run_metadata"]["sell_mode"] == "cash"
+        assert report["run_metadata"]["shorting_enabled"] is False
+        assert report["run_metadata"]["leverage"] == 1
+        assert report["run_metadata"]["hold_behavior"] == "keep_previous_position"
+        assert report["run_metadata"]["initial_position"] == 0
+        assert report["run_metadata"]["max_validation_drawdown_filter"] == -0.85
+        assert report["run_metadata"]["max_validation_turnover_filter"] == 250.0
         assert report["run_metadata"]["label_generation"] == "split_local"
         assert report["run_metadata"]["train_rows_raw"] == 5
         assert report["run_metadata"]["train_rows_labelled"] == 2
@@ -169,11 +182,11 @@ class TestEvaluateModel:
                 "bars": 100,
                 "traded_bars": 10,
                 "cumulative_return": 0.50,
-                "max_drawdown": -0.51,
+                "max_drawdown": -0.86,
                 "turnover": 10.0,
             },
             validation_score=float("-inf"),
-            rejection_reason="validation_max_drawdown_below_-0.50",
+            rejection_reason="validation_max_drawdown_below_-0.85",
         )
         selection = ModelSelectionResult(
             best_candidate=selection.best_candidate,
@@ -187,11 +200,11 @@ class TestEvaluateModel:
         rejected_payload = report["validation_candidates"][1]
         assert rejected_payload["validation_score"] == float("-inf")
         assert rejected_payload["validation_cumulative_return"] == 0.50
-        assert rejected_payload["validation_max_drawdown"] == -0.51
+        assert rejected_payload["validation_max_drawdown"] == -0.86
         assert rejected_payload["validation_turnover"] == 10.0
         assert (
             rejected_payload["rejection_reason"]
-            == "validation_max_drawdown_below_-0.50"
+            == "validation_max_drawdown_below_-0.85"
         )
 
     def test_no_eligible_model_uses_cash_baseline_and_no_selected_model(self) -> None:
@@ -205,11 +218,11 @@ class TestEvaluateModel:
                 "bars": 100,
                 "traded_bars": 10,
                 "cumulative_return": 0.50,
-                "max_drawdown": -0.51,
+                "max_drawdown": -0.86,
                 "turnover": 10.0,
             },
             validation_score=float("-inf"),
-            rejection_reason="validation_max_drawdown_below_-0.50",
+            rejection_reason="validation_max_drawdown_below_-0.85",
         )
         selection = ModelSelectionResult(
             best_candidate=None,
@@ -277,7 +290,7 @@ class TestBacktestExecutionTiming:
         )
 
         assert metrics["execution_lag_bars"] == 1
-        assert metrics["traded_bars"] == 1
+        assert metrics["traded_bars"] == 2
         assert metrics["cumulative_return"] == pytest.approx(-1.0)
 
     def test_fees_apply_to_executed_position_changes(self) -> None:
@@ -287,6 +300,50 @@ class TestBacktestExecutionTiming:
             transaction_fee=0.01,
         )
 
-        assert metrics["turnover"] == 3.0
-        assert metrics["strategy_return_sum"] == pytest.approx(-0.03)
-        assert metrics["cumulative_return"] == pytest.approx((0.99 * 0.98) - 1.0)
+        assert metrics["turnover"] == 2.0
+        assert metrics["strategy_return_sum"] == pytest.approx(-0.02)
+        assert metrics["cumulative_return"] == pytest.approx((0.99 * 1.0 * 0.99) - 1.0)
+
+    def test_buy_buy_buy_enters_once_then_holds(self) -> None:
+        metrics = backtest_metrics(
+            predictions=[1, 1, 1, 1],
+            future_returns=pd.Series([0.0, 0.0, 0.0, 0.0]),
+            transaction_fee=0.01,
+        )
+
+        assert metrics["turnover"] == 1.0
+        assert metrics["traded_bars"] == 3
+        assert metrics["executed_positions_are_long_cash"] is True
+
+    def test_sell_sell_sell_exits_once_then_stays_cash(self) -> None:
+        metrics = backtest_metrics(
+            predictions=[-1, -1, -1, -1],
+            future_returns=pd.Series([0.0, 0.0, 0.0, 0.0]),
+            transaction_fee=0.01,
+            initial_position=1,
+        )
+
+        assert metrics["turnover"] == 1.0
+        assert metrics["traded_bars"] == 1
+        assert metrics["executed_position_min"] == 0.0
+        assert metrics["executed_position_max"] == 1.0
+
+    def test_hold_preserves_previous_target_position(self) -> None:
+        target_positions = signals_to_target_positions(
+            predictions=[1, 0, 0, -1, 0, 1],
+            index=pd.RangeIndex(6),
+            initial_position=0,
+        )
+
+        assert target_positions.tolist() == [1.0, 1.0, 1.0, 0.0, 0.0, 1.0]
+
+    def test_no_negative_positions_are_possible(self) -> None:
+        metrics = backtest_metrics(
+            predictions=[1, -1, 0, 1, -1],
+            future_returns=pd.Series([0.0] * 5),
+            transaction_fee=0.0,
+        )
+
+        assert metrics["executed_position_min"] == 0.0
+        assert metrics["executed_position_max"] == 1.0
+        assert metrics["executed_positions_are_long_cash"] is True

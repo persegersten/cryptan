@@ -219,20 +219,10 @@ class TestTrainAndSelectModel:
                     "bars": 100,
                     "traded_bars": 10,
                     "cumulative_return": 0.50,
-                    "max_drawdown": -0.51,
+                    "max_drawdown": -0.86,
                     "turnover": 10.0,
                 },
-                "validation_max_drawdown_below_-0.50",
-            ),
-            (
-                {
-                    "bars": 100,
-                    "traded_bars": 96,
-                    "cumulative_return": 0.50,
-                    "max_drawdown": -0.10,
-                    "turnover": 10.0,
-                },
-                "validation_traded_bar_ratio_above_0.95",
+                "validation_max_drawdown_below_-0.85",
             ),
             (
                 {
@@ -296,7 +286,7 @@ class TestTrainAndSelectModel:
                 "bars": 100,
                 "traded_bars": 10,
                 "cumulative_return": 10.0,
-                "max_drawdown": -0.51,
+                "max_drawdown": -0.86,
                 "turnover": 10.0,
             },
             "eligible": {
@@ -329,7 +319,7 @@ class TestTrainAndSelectModel:
         assert result.best_candidate.validation_score == pytest.approx(2.0)
         assert result.eligible_candidate_count == 1
         assert result.rejected_candidate_count == 1
-        assert result.candidates[0].rejection_reason == "validation_max_drawdown_below_-0.50"
+        assert result.candidates[0].rejection_reason == "validation_max_drawdown_below_-0.85"
 
     def test_all_rejected_candidates_produce_no_selected_model(
         self, monkeypatch: pytest.MonkeyPatch
@@ -342,7 +332,7 @@ class TestTrainAndSelectModel:
                 "bars": 100,
                 "traded_bars": 10,
                 "cumulative_return": 0.50,
-                "max_drawdown": -0.51,
+                "max_drawdown": -0.86,
                 "turnover": 10.0,
             }
 

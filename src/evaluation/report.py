@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 
 from src.config.model import TrainingConfig
-from src.evaluation.metrics import EXECUTION_LAG_BARS
+from src.evaluation.metrics import EXECUTION_LAG_BARS, PORTFOLIO_MODE, SELL_MODE
 from src.evaluation.metrics import backtest_metrics, classification_metrics
 from src.labels.target import TARGET_LABEL_COLUMN, TARGET_RETURN_COLUMN
 from src.models.trainer import ModelSelectionResult
@@ -98,6 +98,8 @@ def evaluate_model(
             predictions=predictions,
             future_returns=future_returns,
             transaction_fee=config.backtest.transaction_fee,
+            initial_position=config.backtest.initial_position,
+            portfolio_mode=config.backtest.portfolio_mode,
         ),
         "validation_candidates": [
             _candidate_report(candidate)
@@ -164,6 +166,14 @@ def _run_metadata(
         "timeframe": config.timeframe,
         "prediction_horizon_bars": config.prediction_horizon_bars,
         "execution_lag_bars": EXECUTION_LAG_BARS,
+        "portfolio_mode": config.backtest.portfolio_mode,
+        "sell_mode": SELL_MODE,
+        "shorting_enabled": False,
+        "leverage": 1,
+        "hold_behavior": "keep_previous_position",
+        "initial_position": config.backtest.initial_position,
+        "max_validation_drawdown_filter": config.backtest.max_validation_drawdown,
+        "max_validation_turnover_filter": config.backtest.max_validation_turnover,
         "label_generation": "split_local",
         "model_selection_status": model_selection.model_selection_status,
         "risk_filters_applied": True,
@@ -197,6 +207,7 @@ def _cash_baseline_metrics(bars: int) -> dict[str, Any]:
         "transaction_fee": 0.0,
         "bars": int(bars),
         "traded_bars": 0,
+        "exposure_ratio": 0.0,
         "mean_strategy_return": 0.0,
         "strategy_return_sum": 0.0,
         "cumulative_return": 0.0,
@@ -205,6 +216,15 @@ def _cash_baseline_metrics(bars: int) -> dict[str, Any]:
         "max_drawdown": 0.0,
         "turnover": 0.0,
         "execution_lag_bars": EXECUTION_LAG_BARS,
+        "portfolio_mode": PORTFOLIO_MODE,
+        "sell_mode": SELL_MODE,
+        "shorting_enabled": False,
+        "leverage": 1,
+        "hold_behavior": "keep_previous_position",
+        "initial_position": 0,
+        "executed_position_min": 0.0,
+        "executed_position_max": 0.0,
+        "executed_positions_are_long_cash": True,
         "baseline": "cash",
     }
 

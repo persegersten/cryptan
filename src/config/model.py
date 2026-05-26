@@ -67,6 +67,14 @@ class SplitConfig(BaseModel):
 class BacktestConfig(BaseModel):
     """Simple strategy backtest parameters."""
 
+    portfolio_mode: str = Field(
+        "all_in_long_cash",
+        description="Portfolio interpretation for model signals.",
+    )
+    initial_position: int = Field(
+        0,
+        description="Initial executed position before the first in-split signal.",
+    )
     transaction_fee: float = Field(
         0.001,
         ge=0.0,
@@ -75,6 +83,31 @@ class BacktestConfig(BaseModel):
             "e.g. 0.001 is 10 bps."
         ),
     )
+    max_validation_drawdown: float = Field(
+        -0.85,
+        le=0.0,
+        description="Most negative validation max drawdown allowed before rejection.",
+    )
+    max_validation_turnover: float = Field(
+        250.0,
+        ge=0.0,
+        description="Maximum validation turnover allowed before rejection.",
+    )
+
+    @field_validator("portfolio_mode")
+    @classmethod
+    def portfolio_mode_must_be_supported(cls, value: str) -> str:
+        value = value.strip()
+        if value != "all_in_long_cash":
+            raise ValueError("Only portfolio_mode='all_in_long_cash' is supported.")
+        return value
+
+    @field_validator("initial_position")
+    @classmethod
+    def initial_position_must_be_cash_or_long(cls, value: int) -> int:
+        if value not in (0, 1):
+            raise ValueError("initial_position must be 0 (cash) or 1 (long).")
+        return value
 
 
 class ModelCandidateConfig(BaseModel):
