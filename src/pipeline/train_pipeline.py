@@ -24,13 +24,14 @@ import pandas as pd
 from src.config.loader import load_config
 from src.config.model import TrainingConfig
 from src.evaluation import evaluate_and_save_report
+from src.evaluation.metrics import RETURN_OVER_DRAWDOWN_METRIC
 from src.features.builder import build_features
 from src.ingestion.market_data import BinanceMarketDataSource
 from src.labels.target import add_target_labels
 from src.models import train_and_select_model
 from src.preprocessing.cleaner import clean_market_data
 from src.preprocessing.merger import merge_symbol_frames
-from src.splitting.chronological import split_chronologically
+from src.splitting.chronological import ChronologicalSplit, split_features_chronologically
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,14 +64,14 @@ def run(config: TrainingConfig) -> None:
         logger.info(
             "Model candidates: %s | Selection metric: %s",
             ", ".join(candidate_names),
-            config.model_selection_metric,
+            RETURN_OVER_DRAWDOWN_METRIC,
         )
     else:
         logger.info(
             "Model: %s | Params: %s | Selection metric: %s",
             config.model_type,
             config.model_params or "{}",
-            config.model_selection_metric,
+            RETURN_OVER_DRAWDOWN_METRIC,
         )
     logger.info("Artifacts dir: %s", config.artifacts_dir)
 
@@ -126,23 +127,21 @@ def run(config: TrainingConfig) -> None:
     )
 
     # ------------------------------------------------------------------
-    # Step 5: Create target labels for the configured trading symbol
+    # Step 6: Split chronologically, then create split-local target labels
     # ------------------------------------------------------------------
-    logger.info("Creating target labels ...")
-    labelled_df = add_target_labels(feature_df, config)
+    logger.info("Splitting feature data chronologically before target generation ...")
+    raw_split = split_features_chronologically(feature_df, config)
     logger.info(
-        "Labelled DataFrame: %d rows × %d columns",
-        len(labelled_df),
-        len(labelled_df.columns),
+        "Raw split sizes: train=%d, validation=%d, test=%d",
+        len(raw_split.train),
+        len(raw_split.validation),
+        len(raw_split.test),
     )
 
-    # ------------------------------------------------------------------
-    # Step 6: Split chronologically into train / validation / test
-    # ------------------------------------------------------------------
-    logger.info("Splitting labelled data chronologically ...")
-    data_split = split_chronologically(labelled_df, config)
+    logger.info("Creating split-local target labels ...")
+    data_split = _label_split_partitions(raw_split, config)
     logger.info(
-        "Split sizes: train=%d, validation=%d, test=%d",
+        "Labelled split sizes after horizon purge: train=%d, validation=%d, test=%d",
         len(data_split.train),
         len(data_split.validation),
         len(data_split.test),
@@ -153,13 +152,16 @@ def run(config: TrainingConfig) -> None:
     # ------------------------------------------------------------------
     logger.info("Training model candidate(s) ...")
     model_selection = train_and_select_model(data_split, config)
-    logger.info(
-        "Selected model: %s | Validation %s=%.6f | Features=%d",
-        model_selection.best_candidate.name,
-        model_selection.selection_metric,
-        model_selection.best_candidate.validation_metrics[model_selection.selection_metric],
-        len(model_selection.feature_columns),
-    )
+    if model_selection.best_candidate is None:
+        logger.warning("No eligible model selected; trading evaluation will use cash baseline.")
+    else:
+        logger.info(
+            "Selected model: %s | Validation %s=%.6f | Features=%d",
+            model_selection.best_candidate.name,
+            model_selection.selection_metric,
+            model_selection.best_candidate.validation_score,
+            len(model_selection.feature_columns),
+        )
 
     # ------------------------------------------------------------------
     # Step 8: Evaluate with ML metrics and a simple backtest report
@@ -173,6 +175,30 @@ def run(config: TrainingConfig) -> None:
     # ------------------------------------------------------------------
 
     logger.info("=== cryptan training pipeline end ===")
+
+
+def _label_split_partitions(
+    raw_split: ChronologicalSplit,
+    config: TrainingConfig,
+) -> ChronologicalSplit:
+    """Generate labels independently inside each chronological partition."""
+    raw_row_counts = raw_split.row_counts
+    labelled_split = ChronologicalSplit(
+        train=add_target_labels(raw_split.train, config, allow_empty=True),
+        validation=add_target_labels(raw_split.validation, config, allow_empty=True),
+        test=add_target_labels(raw_split.test, config, allow_empty=True),
+        raw_row_counts=raw_row_counts,
+    )
+    empty_partitions = [
+        name for name, count in labelled_split.row_counts.items() if count == 0
+    ]
+    if empty_partitions:
+        raise ValueError(
+            "Split-local target generation produced empty labelled partition(s) "
+            f"{empty_partitions}. Increase history, reduce prediction_horizon_bars, "
+            "or adjust split fractions."
+        )
+    return labelled_split
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

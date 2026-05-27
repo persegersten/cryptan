@@ -246,6 +246,53 @@ class TestNoFutureLeakage:
         expected_ma3 = sum(closes[original_pos - 2 : original_pos + 1]) / 3
         assert result["ETH_ma_short"].iloc[row_idx] == pytest.approx(expected_ma3, rel=1e-9)
 
+    def test_pct_change_does_not_use_future_rows(self) -> None:
+        base = pd.DataFrame({"ETH_close": [10.0, 11.0, 12.0, 999.0]})
+        changed_future = pd.DataFrame({"ETH_close": [10.0, 11.0, 12.0, 1.0]})
+
+        base_result = add_return_features(base, "ETH", return_windows=[2])
+        changed_result = add_return_features(changed_future, "ETH", return_windows=[2])
+
+        assert base_result["ETH_return_2"].iloc[2] == pytest.approx(
+            changed_result["ETH_return_2"].iloc[2]
+        )
+
+    def test_rolling_volatility_does_not_use_future_rows(self) -> None:
+        base = pd.DataFrame({"ETH_close": [10.0, 11.0, 10.0, 12.0, 999.0]})
+        changed_future = pd.DataFrame({"ETH_close": [10.0, 11.0, 10.0, 12.0, 1.0]})
+
+        base_result = add_volatility_features(base, "ETH", volatility_window=3)
+        changed_result = add_volatility_features(
+            changed_future, "ETH", volatility_window=3
+        )
+
+        assert base_result["ETH_volatility"].iloc[3] == pytest.approx(
+            changed_result["ETH_volatility"].iloc[3]
+        )
+
+    def test_rolling_correlation_does_not_use_future_rows(self) -> None:
+        base = pd.DataFrame(
+            {
+                "ETH_close": [10.0, 11.0, 10.0, 12.0, 999.0],
+                "BNB_close": [20.0, 19.0, 21.0, 20.0, 1.0],
+            }
+        )
+        changed_future = pd.DataFrame(
+            {
+                "ETH_close": [10.0, 11.0, 10.0, 12.0, 1.0],
+                "BNB_close": [20.0, 19.0, 21.0, 20.0, 999.0],
+            }
+        )
+
+        base_result = add_cross_asset_features(base, "ETH", "BNB", correlation_window=3)
+        changed_result = add_cross_asset_features(
+            changed_future, "ETH", "BNB", correlation_window=3
+        )
+
+        assert base_result["ETH_BNB_corr"].iloc[3] == pytest.approx(
+            changed_result["ETH_BNB_corr"].iloc[3]
+        )
+
 
 # ---------------------------------------------------------------------------
 # build_features — lookback row dropping

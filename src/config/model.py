@@ -67,6 +67,14 @@ class SplitConfig(BaseModel):
 class BacktestConfig(BaseModel):
     """Simple strategy backtest parameters."""
 
+    portfolio_mode: str = Field(
+        "all_in_long_cash",
+        description="Portfolio interpretation for model signals.",
+    )
+    initial_position: int = Field(
+        0,
+        description="Initial executed position before the first in-split signal.",
+    )
     transaction_fee: float = Field(
         0.001,
         ge=0.0,
@@ -75,6 +83,63 @@ class BacktestConfig(BaseModel):
             "e.g. 0.001 is 10 bps."
         ),
     )
+    return_buffer: float = Field(
+        0.005,
+        ge=0.0,
+        description="Extra return required beyond round-trip fees for a long label.",
+    )
+    min_validation_cumulative_return: float = Field(
+        0.10,
+        description="Minimum validation cumulative return required for eligibility.",
+    )
+    min_validation_exposure_ratio: float = Field(
+        0.10,
+        ge=0.0,
+        le=1.0,
+        description="Minimum validation exposure ratio required for eligibility.",
+    )
+    min_validation_traded_bars: int = Field(
+        100,
+        ge=0,
+        description="Minimum number of validation bars with long exposure.",
+    )
+    max_validation_drawdown: float = Field(
+        -0.85,
+        le=0.0,
+        description="Most negative validation max drawdown allowed before rejection.",
+    )
+    max_validation_turnover: float = Field(
+        250.0,
+        ge=0.0,
+        description="Maximum validation turnover allowed before rejection.",
+    )
+    entry_thresholds: list[float] = Field(
+        default=[0.50, 0.525, 0.55, 0.575, 0.60, 0.625, 0.65],
+        description="Probability thresholds for entering long in policy search.",
+    )
+    exit_thresholds: list[float] = Field(
+        default=[0.35, 0.40, 0.45, 0.475, 0.50],
+        description="Probability thresholds for exiting to cash in policy search.",
+    )
+    min_hold_bars_grid: list[int] = Field(
+        default=[0, 3, 6, 12, 24],
+        description="Minimum-hold bar counts for validation policy search.",
+    )
+
+    @field_validator("portfolio_mode")
+    @classmethod
+    def portfolio_mode_must_be_supported(cls, value: str) -> str:
+        value = value.strip()
+        if value != "all_in_long_cash":
+            raise ValueError("Only portfolio_mode='all_in_long_cash' is supported.")
+        return value
+
+    @field_validator("initial_position")
+    @classmethod
+    def initial_position_must_be_cash_or_long(cls, value: int) -> int:
+        if value not in (0, 1):
+            raise ValueError("initial_position must be 0 (cash) or 1 (long).")
+        return value
 
 
 class ModelCandidateConfig(BaseModel):
@@ -141,7 +206,11 @@ class TrainingConfig(BaseModel):
     return_threshold: float = Field(
         0.01,
         gt=0.0,
-        description="Minimum absolute return to classify as directional (+1/-1).",
+        description="Legacy directional threshold; binary_long_cash uses backtest.return_buffer.",
+    )
+    model_task: str = Field(
+        "binary_long_cash",
+        description="Supervised target type. Only binary_long_cash is supported.",
     )
 
     # --- split ---
@@ -241,6 +310,19 @@ class TrainingConfig(BaseModel):
         if not value:
             raise ValueError("model_type and model_selection_metric must not be empty.")
         return value
+
+    @field_validator("model_task")
+    @classmethod
+    def model_task_must_be_supported(cls, value: str) -> str:
+        value = value.strip()
+        if value != "binary_long_cash":
+            raise ValueError("Only model_task='binary_long_cash' is supported.")
+        return value
+
+    @property
+    def min_required_future_return(self) -> float:
+        """Return threshold for binary long/cash positive labels."""
+        return (2.0 * self.backtest.transaction_fee) + self.backtest.return_buffer
 
     @field_validator("model_selection_metric")
     @classmethod

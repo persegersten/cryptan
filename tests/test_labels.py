@@ -2,7 +2,7 @@
 
 Covers:
 - Explicit future shifting for the configured trading symbol.
-- Multiclass target assignment (-1, 0, 1).
+- Binary long/cash target assignment (0, 1).
 - Threshold boundary behaviour.
 - Dropping rows without a full future horizon.
 - Chronological ordering and input immutability.
@@ -20,6 +20,7 @@ from src.labels.target import (
     TARGET_RETURN_COLUMN,
     add_target_labels,
 )
+from src.splitting.chronological import split_features_chronologically
 
 
 _API_KEY = "test-api-key-abc123"
@@ -31,6 +32,7 @@ def _make_config(
     signal_symbols: list[str] | None = None,
     horizon: int = 2,
     threshold: float = 0.05,
+    split: dict[str, float] | None = None,
 ) -> TrainingConfig:
     """Build a minimal TrainingConfig for target-label tests."""
     return TrainingConfig(
@@ -41,6 +43,8 @@ def _make_config(
         end_date=-1,
         prediction_horizon_bars=horizon,
         return_threshold=threshold,
+        backtest={"transaction_fee": 0.0, "return_buffer": threshold},
+        split=split or {"train": 0.70, "validation": 0.15, "test": 0.15},
         data_api_key=_API_KEY,
         data_api_secret=_API_SECRET,
     )
@@ -77,13 +81,13 @@ class TestAddTargetLabelsCorrectness:
         # Row 1 return: (133.1 - 110) / 110 = 0.21.
         assert result[TARGET_RETURN_COLUMN].tolist() == pytest.approx([0.21, 0.21])
 
-    def test_positive_neutral_and_negative_labels_are_created(self) -> None:
+    def test_positive_returns_above_threshold_are_long(self) -> None:
         df = _make_feature_df([100.0, 110.0, 100.0, 95.0, 95.0])
         config = _make_config(horizon=1, threshold=0.05)
 
         result = add_target_labels(df, config)
 
-        assert result[TARGET_LABEL_COLUMN].tolist() == [1, -1, 0, 0]
+        assert result[TARGET_LABEL_COLUMN].tolist() == [1, 0, 0, 0]
 
     def test_threshold_boundaries_are_neutral(self) -> None:
         df = _make_feature_df([100.0, 105.0, 99.75])
@@ -91,9 +95,35 @@ class TestAddTargetLabelsCorrectness:
 
         result = add_target_labels(df, config)
 
-        # +5% and -5% are both neutral because directional classes require
-        # strictly greater than threshold magnitude.
+        # Binary long labels require strictly greater return than the configured
+        # minimum required future return.
         assert result[TARGET_LABEL_COLUMN].tolist() == [0, 0]
+
+    @pytest.mark.parametrize("return_buffer", [0.0, 0.0025, 0.005, 0.01])
+    def test_binary_label_threshold_uses_fee_plus_return_buffer(
+        self,
+        return_buffer: float,
+    ) -> None:
+        threshold = (2 * 0.001) + return_buffer
+        above_threshold_close = 100.0 * (1.0 + threshold + 0.0001)
+        below_threshold_close = 100.0 * (1.0 + threshold - 0.0001)
+        df = _make_feature_df([100.0, above_threshold_close, below_threshold_close])
+        config = TrainingConfig(
+            trading_symbol="ETH",
+            signal_symbols=["ETH"],
+            timeframe="1h",
+            start_date=-365,
+            end_date=-1,
+            prediction_horizon_bars=1,
+            backtest={"transaction_fee": 0.001, "return_buffer": return_buffer},
+            data_api_key=_API_KEY,
+            data_api_secret=_API_SECRET,
+        )
+
+        result = add_target_labels(df, config)
+
+        assert config.min_required_future_return == pytest.approx(threshold)
+        assert result[TARGET_LABEL_COLUMN].tolist() == [1, 0]
 
     def test_drops_final_rows_without_full_future_horizon(self) -> None:
         df = _make_feature_df([100.0, 101.0, 102.0, 103.0, 104.0])
@@ -111,7 +141,7 @@ class TestAddTargetLabelsCorrectness:
 
         result = add_target_labels(df, config)
 
-        assert result[TARGET_LABEL_COLUMN].tolist() == [-1, -1]
+        assert result[TARGET_LABEL_COLUMN].tolist() == [0, 0]
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +179,40 @@ class TestAddTargetLabelsTimeSeriesSafety:
         assert TARGET_LABEL_COLUMN not in df.columns
         assert TARGET_RETURN_COLUMN not in df.columns
 
+    def test_split_local_labels_do_not_cross_partition_boundaries(self) -> None:
+        df = _make_feature_df(
+            [
+                100.0,
+                101.0,
+                102.0,
+                103.0,
+                1_000.0,
+                1_100.0,
+                1_200.0,
+                1_300.0,
+                1_000_000.0,
+                1_100_000.0,
+                1_200_000.0,
+                1_300_000.0,
+            ]
+        )
+        config = _make_config(
+            horizon=3,
+            threshold=0.01,
+            split={"train": 0.50, "validation": 0.25, "test": 0.25},
+        )
+
+        raw_split = split_features_chronologically(df, config)
+        train = add_target_labels(raw_split.train, config, allow_empty=True)
+        validation = add_target_labels(raw_split.validation, config, allow_empty=True)
+
+        assert len(raw_split.train) == 6
+        assert len(raw_split.validation) == 3
+        assert len(raw_split.test) == 3
+        assert len(train) == 3
+        assert train["timestamp"].max() == raw_split.train["timestamp"].iloc[-4]
+        assert validation.empty
+
 
 # ---------------------------------------------------------------------------
 # add_target_labels — error guards
@@ -183,4 +247,3 @@ class TestAddTargetLabelsErrorGuards:
 
         with pytest.raises(ValueError, match="empty"):
             add_target_labels(df, config)
-
