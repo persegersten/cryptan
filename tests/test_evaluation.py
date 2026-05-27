@@ -280,6 +280,8 @@ class TestEvaluateModel:
         assert report["backtest_metrics"]["max_drawdown"] == 0.0
         assert report["backtest_metrics"]["traded_bars"] == 0
         assert report["backtest_metrics"]["turnover"] == 0.0
+        assert report["experiment_verdict"]["status"] == "NO_TRADE"
+        assert report["experiment_verdict"]["live_pilot_allowed"] is False
 
     def test_missing_feature_column_raises_clear_error(self) -> None:
         split = _make_split()
@@ -294,6 +296,32 @@ class TestEvaluateModel:
         with pytest.raises(ValueError, match="missing feature columns"):
             evaluate_model(selection, split, _make_config())
 
+    def test_verdict_allows_tiny_live_pilot_only_when_safety_criteria_pass(
+        self,
+    ) -> None:
+        split = ChronologicalSplit(
+            train=_frame([1.0, 2.0], [1, 1], [0.01, 0.01]),
+            validation=_frame([3.0, 4.0], [1, 0], [0.02, -0.01]),
+            test=_frame(
+                [5.0, 6.0, 7.0, 8.0],
+                [0, 1, 0, 1],
+                [-0.10, 0.20, -0.10, 0.20],
+            ),
+        )
+        selection = _make_selection([1, 0, 1, 0])
+
+        report = evaluate_model(selection, split, _make_config())
+
+        verdict = report["experiment_verdict"]
+        assert verdict["status"] == "TINY_LIVE_PILOT_ALLOWED"
+        assert verdict["live_pilot_allowed"] is True
+
+        strict_config = _make_config()
+        strict_config.backtest.max_validation_turnover = 2.0
+        recomputed = evaluate_model(selection, split, strict_config)
+
+        assert recomputed["experiment_verdict"]["status"] == "PAPER_TRADE_ONLY"
+
 
 class TestEvaluateAndSaveReport:
     def test_saves_json_report_under_timestamped_artifact_directory(
@@ -306,12 +334,26 @@ class TestEvaluateAndSaveReport:
         )
 
         assert artifact.report_path.name == "evaluation_report.json"
+        assert artifact.html_report_path.name == "evaluation_report.html"
         assert artifact.report_path.exists()
+        assert artifact.html_report_path.exists()
         assert artifact.report_path.parent.parent == tmp_path
 
         saved = json.loads(artifact.report_path.read_text(encoding="utf-8"))
         assert saved["run_metadata"]["trading_symbol"] == "ETH"
         assert saved["backtest_metrics"]["bars"] == 4
+        assert "experiment_verdict" in saved
+
+        html = artifact.html_report_path.read_text(encoding="utf-8")
+        assert "Executive Summary" in html
+        assert "Experiment verdict" in html
+        assert "Selected model" in html
+        assert "fixed" in html
+        assert "Test cumulative return" in html
+        assert "Benchmark cumulative return" in html
+        assert "Max drawdown" in html
+        assert "Exposure ratio" in html
+        assert "Turnover" in html
 
 
 class TestBacktestExecutionTiming:
