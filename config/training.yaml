@@ -17,9 +17,10 @@ timeframe: 1h
 
 # Number of bars ahead to predict.
 prediction_horizon_bars: 12
+model_task: binary_long_cash
 
-# Minimum fractional return magnitude to be labelled as directional (+1 or -1).
-# Returns smaller than this threshold in absolute value are labelled 0 (neutral).
+# Legacy directional threshold. binary_long_cash labels use:
+# 2 * transaction_fee + backtest.return_buffer.
 return_threshold: 0.01
 
 # Historical date range for data collection as day offsets from today (UTC).
@@ -40,6 +41,10 @@ backtest:
   portfolio_mode: all_in_long_cash
   initial_position: 0
   transaction_fee: 0.001
+  return_buffer: 0.005
+  min_validation_cumulative_return: 0.10
+  min_validation_exposure_ratio: 0.10
+  min_validation_traded_bars: 100
   max_validation_drawdown: -0.85
   max_validation_turnover: 250.0
 

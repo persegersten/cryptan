@@ -2,7 +2,7 @@
 
 Covers:
 - Explicit future shifting for the configured trading symbol.
-- Multiclass target assignment (-1, 0, 1).
+- Binary long/cash target assignment (0, 1).
 - Threshold boundary behaviour.
 - Dropping rows without a full future horizon.
 - Chronological ordering and input immutability.
@@ -43,6 +43,7 @@ def _make_config(
         end_date=-1,
         prediction_horizon_bars=horizon,
         return_threshold=threshold,
+        backtest={"transaction_fee": 0.0, "return_buffer": threshold},
         split=split or {"train": 0.70, "validation": 0.15, "test": 0.15},
         data_api_key=_API_KEY,
         data_api_secret=_API_SECRET,
@@ -80,13 +81,13 @@ class TestAddTargetLabelsCorrectness:
         # Row 1 return: (133.1 - 110) / 110 = 0.21.
         assert result[TARGET_RETURN_COLUMN].tolist() == pytest.approx([0.21, 0.21])
 
-    def test_positive_neutral_and_negative_labels_are_created(self) -> None:
+    def test_positive_returns_above_threshold_are_long(self) -> None:
         df = _make_feature_df([100.0, 110.0, 100.0, 95.0, 95.0])
         config = _make_config(horizon=1, threshold=0.05)
 
         result = add_target_labels(df, config)
 
-        assert result[TARGET_LABEL_COLUMN].tolist() == [1, -1, 0, 0]
+        assert result[TARGET_LABEL_COLUMN].tolist() == [1, 0, 0, 0]
 
     def test_threshold_boundaries_are_neutral(self) -> None:
         df = _make_feature_df([100.0, 105.0, 99.75])
@@ -94,9 +95,35 @@ class TestAddTargetLabelsCorrectness:
 
         result = add_target_labels(df, config)
 
-        # +5% and -5% are both neutral because directional classes require
-        # strictly greater than threshold magnitude.
+        # Binary long labels require strictly greater return than the configured
+        # minimum required future return.
         assert result[TARGET_LABEL_COLUMN].tolist() == [0, 0]
+
+    @pytest.mark.parametrize("return_buffer", [0.0, 0.0025, 0.005, 0.01])
+    def test_binary_label_threshold_uses_fee_plus_return_buffer(
+        self,
+        return_buffer: float,
+    ) -> None:
+        threshold = (2 * 0.001) + return_buffer
+        above_threshold_close = 100.0 * (1.0 + threshold + 0.0001)
+        below_threshold_close = 100.0 * (1.0 + threshold - 0.0001)
+        df = _make_feature_df([100.0, above_threshold_close, below_threshold_close])
+        config = TrainingConfig(
+            trading_symbol="ETH",
+            signal_symbols=["ETH"],
+            timeframe="1h",
+            start_date=-365,
+            end_date=-1,
+            prediction_horizon_bars=1,
+            backtest={"transaction_fee": 0.001, "return_buffer": return_buffer},
+            data_api_key=_API_KEY,
+            data_api_secret=_API_SECRET,
+        )
+
+        result = add_target_labels(df, config)
+
+        assert config.min_required_future_return == pytest.approx(threshold)
+        assert result[TARGET_LABEL_COLUMN].tolist() == [1, 0]
 
     def test_drops_final_rows_without_full_future_horizon(self) -> None:
         df = _make_feature_df([100.0, 101.0, 102.0, 103.0, 104.0])
@@ -114,7 +141,7 @@ class TestAddTargetLabelsCorrectness:
 
         result = add_target_labels(df, config)
 
-        assert result[TARGET_LABEL_COLUMN].tolist() == [-1, -1]
+        assert result[TARGET_LABEL_COLUMN].tolist() == [0, 0]
 
 
 # ---------------------------------------------------------------------------

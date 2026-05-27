@@ -1,10 +1,9 @@
 """Target-label generation for the configured trading symbol.
 
-The label at timestamp ``t`` is based on the future close return from ``t`` to
-``t + prediction_horizon_bars``:
+The binary long/cash label at timestamp ``t`` is based on the future close
+return from ``t`` to ``t + prediction_horizon_bars``:
 
-* ``1`` when future return is greater than ``return_threshold``.
-* ``-1`` when future return is less than negative ``return_threshold``.
+* ``1`` when future return is greater than ``min_required_future_return``.
 * ``0`` otherwise.
 
 Rows without a full future horizon are dropped so downstream splitting and
@@ -22,7 +21,7 @@ from src.config.model import TrainingConfig
 logger = logging.getLogger(__name__)
 
 TARGET_RETURN_COLUMN = "target_future_return"
-TARGET_LABEL_COLUMN = "target_label"
+TARGET_LABEL_COLUMN = "target_long"
 
 
 def add_target_labels(
@@ -31,7 +30,7 @@ def add_target_labels(
     *,
     allow_empty: bool = False,
 ) -> pd.DataFrame:
-    """Add multiclass target labels for ``config.trading_symbol``.
+    """Add binary long/cash target labels for ``config.trading_symbol``.
 
     Parameters
     ----------
@@ -40,13 +39,13 @@ def add_target_labels(
         ``{trading_symbol}_close``. The input is not mutated.
     config:
         Validated training config supplying the trading symbol, prediction
-        horizon, and return threshold.
+        horizon, transaction fee, and return buffer.
 
     Returns
     -------
     pandas.DataFrame
         Chronologically sorted DataFrame with ``target_future_return`` and
-        ``target_label`` appended. The final ``prediction_horizon_bars`` rows
+        ``target_long`` appended. The final ``prediction_horizon_bars`` rows
         are dropped because their future return is unknown.
 
     Raises
@@ -72,17 +71,14 @@ def add_target_labels(
         )
 
     horizon = config.prediction_horizon_bars
-    threshold = config.return_threshold
+    threshold = config.min_required_future_return
 
     df = feature_df.sort_values("timestamp").reset_index(drop=True).copy()
     close = df[close_col]
     future_close = close.shift(-horizon)
     df[TARGET_RETURN_COLUMN] = (future_close - close) / close
 
-    df[TARGET_LABEL_COLUMN] = 0
-    df.loc[df[TARGET_RETURN_COLUMN] > threshold, TARGET_LABEL_COLUMN] = 1
-    df.loc[df[TARGET_RETURN_COLUMN] < -threshold, TARGET_LABEL_COLUMN] = -1
-    df[TARGET_LABEL_COLUMN] = df[TARGET_LABEL_COLUMN].astype("int64")
+    df[TARGET_LABEL_COLUMN] = (df[TARGET_RETURN_COLUMN] > threshold).astype("int64")
 
     rows_before = len(df)
     df = df.dropna(subset=[TARGET_RETURN_COLUMN]).reset_index(drop=True)
@@ -102,7 +98,7 @@ def add_target_labels(
         )
 
     logger.info(
-        "Target labeling complete for %s: %d rows, horizon=%d, threshold=%s, "
+        "Target labeling complete for %s: %d rows, horizon=%d, min_required_return=%s, "
         "class_counts=%s",
         trading_symbol,
         len(df),

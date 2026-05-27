@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import datetime
 import json
 import logging
+import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,8 +15,9 @@ import pandas as pd
 from src.config.model import TrainingConfig
 from src.evaluation.metrics import EXECUTION_LAG_BARS, PORTFOLIO_MODE, SELL_MODE
 from src.evaluation.metrics import backtest_metrics, classification_metrics
+from src.evaluation.metrics import probability_policy_backtest
 from src.labels.target import TARGET_LABEL_COLUMN, TARGET_RETURN_COLUMN
-from src.models.trainer import ModelSelectionResult
+from src.models.trainer import ModelSelectionResult, predict_long_probabilities
 from src.splitting.chronological import ChronologicalSplit
 
 logger = logging.getLogger(__name__)
@@ -61,8 +63,13 @@ def evaluate_model(
             "run_metadata": _run_metadata(data_split, config, model_selection),
             "ml_metrics": None,
             "backtest_metrics": _cash_baseline_metrics(len(data_split.test)),
+            "baselines": _baseline_reports(data_split, config),
             "validation_candidates": [
                 _candidate_report(candidate)
+                for candidate in model_selection.candidates
+            ],
+            "candidate_summary": [
+                _candidate_summary(candidate)
                 for candidate in model_selection.candidates
             ],
         }
@@ -85,24 +92,38 @@ def evaluate_model(
             f"{sorted(missing_required)}."
         )
 
-    predictions = model_selection.estimator.predict(
-        data_split.test[model_selection.feature_columns]
+    best = model_selection.best_candidate
+    if best is None:
+        raise ValueError("Expected a selected candidate after no-candidate branch.")
+
+    probabilities = predict_long_probabilities(
+        best.estimator,
+        data_split.test[model_selection.feature_columns],
     )
+    predictions = (probabilities >= 0.5).astype("int64")
     y_true = data_split.test[TARGET_LABEL_COLUMN]
     future_returns = data_split.test[TARGET_RETURN_COLUMN]
 
     return {
         "run_metadata": _run_metadata(data_split, config, model_selection),
         "ml_metrics": classification_metrics(y_true, predictions),
-        "backtest_metrics": backtest_metrics(
-            predictions=predictions,
+        "backtest_metrics": probability_policy_backtest(
+            probabilities=probabilities,
             future_returns=future_returns,
             transaction_fee=config.backtest.transaction_fee,
+            entry_threshold=best.entry_threshold,
+            exit_threshold=best.exit_threshold,
+            min_hold_bars=best.min_hold_bars,
             initial_position=config.backtest.initial_position,
             portfolio_mode=config.backtest.portfolio_mode,
         ),
+        "baselines": _baseline_reports(data_split, config),
         "validation_candidates": [
             _candidate_report(candidate)
+            for candidate in model_selection.candidates
+        ],
+        "candidate_summary": [
+            _candidate_summary(candidate)
             for candidate in model_selection.candidates
         ],
     }
@@ -114,6 +135,10 @@ def _candidate_report(candidate: object) -> dict[str, Any]:
         "model_type": candidate.model_type,
         "validation_metrics": candidate.validation_metrics,
         "validation_backtest_metrics": candidate.validation_backtest_metrics,
+        "return_buffer": candidate.return_buffer,
+        "entry_threshold": candidate.entry_threshold,
+        "exit_threshold": candidate.exit_threshold,
+        "min_hold_bars": candidate.min_hold_bars,
         "validation_cumulative_return": candidate.validation_backtest_metrics[
             "cumulative_return"
         ],
@@ -122,11 +147,46 @@ def _candidate_report(candidate: object) -> dict[str, Any]:
         ],
         "validation_turnover": candidate.validation_backtest_metrics["turnover"],
         "validation_traded_bars": candidate.validation_backtest_metrics["traded_bars"],
+        "validation_exposure_ratio": candidate.validation_backtest_metrics[
+            "exposure_ratio"
+        ],
         "validation_score": candidate.validation_score,
+        "return_over_drawdown": candidate.return_over_drawdown,
+        "eligible": (
+            not candidate.rejection_reasons
+            and math.isfinite(candidate.validation_score)
+        ),
+        "rejection_reasons": candidate.rejection_reasons,
     }
-    if candidate.rejection_reason is not None:
-        payload["rejection_reason"] = candidate.rejection_reason
     return payload
+
+
+def _candidate_summary(candidate: object) -> dict[str, Any]:
+    return {
+        "name": candidate.name,
+        "return_buffer": candidate.return_buffer,
+        "entry_threshold": candidate.entry_threshold,
+        "exit_threshold": candidate.exit_threshold,
+        "min_hold_bars": candidate.min_hold_bars,
+        "validation_cumulative_return": candidate.validation_backtest_metrics[
+            "cumulative_return"
+        ],
+        "validation_max_drawdown": candidate.validation_backtest_metrics[
+            "max_drawdown"
+        ],
+        "validation_exposure_ratio": candidate.validation_backtest_metrics[
+            "exposure_ratio"
+        ],
+        "validation_traded_bars": candidate.validation_backtest_metrics["traded_bars"],
+        "validation_turnover": candidate.validation_backtest_metrics["turnover"],
+        "validation_score": candidate.validation_score,
+        "return_over_drawdown": candidate.return_over_drawdown,
+        "eligible": (
+            not candidate.rejection_reasons
+            and math.isfinite(candidate.validation_score)
+        ),
+        "rejection_reasons": candidate.rejection_reasons,
+    }
 
 
 def _run_metadata(
@@ -158,13 +218,22 @@ def _run_metadata(
                     "turnover"
                 ]
             ),
+            "return_over_drawdown": model_selection.best_candidate.return_over_drawdown,
+            "entry_threshold": model_selection.best_candidate.entry_threshold,
+            "exit_threshold": model_selection.best_candidate.exit_threshold,
+            "min_hold_bars": model_selection.best_candidate.min_hold_bars,
+            "return_buffer": model_selection.best_candidate.return_buffer,
         }
+    best_before_filters = _best_candidate_before_filters(model_selection)
     return {
         "created_at_utc": _utc_now().isoformat(),
         "trading_symbol": config.trading_symbol,
         "signal_symbols": config.signal_symbols,
         "timeframe": config.timeframe,
         "prediction_horizon_bars": config.prediction_horizon_bars,
+        "model_task": config.model_task,
+        "min_required_future_return": config.min_required_future_return,
+        "return_buffer": config.backtest.return_buffer,
         "execution_lag_bars": EXECUTION_LAG_BARS,
         "portfolio_mode": config.backtest.portfolio_mode,
         "sell_mode": SELL_MODE,
@@ -172,6 +241,11 @@ def _run_metadata(
         "leverage": 1,
         "hold_behavior": "keep_previous_position",
         "initial_position": config.backtest.initial_position,
+        "min_validation_cumulative_return": (
+            config.backtest.min_validation_cumulative_return
+        ),
+        "min_validation_exposure_ratio": config.backtest.min_validation_exposure_ratio,
+        "min_validation_traded_bars": config.backtest.min_validation_traded_bars,
         "max_validation_drawdown_filter": config.backtest.max_validation_drawdown,
         "max_validation_turnover_filter": config.backtest.max_validation_turnover,
         "label_generation": "split_local",
@@ -183,7 +257,13 @@ def _run_metadata(
         "no_trade_reason": (
             None
             if model_selection.best_candidate is not None
-            else "No candidate passed validation risk filters"
+            else "No candidate passed binary long/cash validation filters"
+        ),
+        "best_candidate_before_filters": (
+            None if best_before_filters is None else _candidate_summary(best_before_filters)
+        ),
+        "best_candidate_rejection_reasons": (
+            None if best_before_filters is None else best_before_filters.rejection_reasons
         ),
         "return_threshold": config.return_threshold,
         "selected_model": selected_model,
@@ -226,7 +306,99 @@ def _cash_baseline_metrics(bars: int) -> dict[str, Any]:
         "executed_position_max": 0.0,
         "executed_positions_are_long_cash": True,
         "baseline": "cash",
+        }
+
+
+def _baseline_reports(
+    data_split: ChronologicalSplit,
+    config: TrainingConfig,
+) -> dict[str, Any]:
+    """Return validation/test baseline backtests for long/cash comparison."""
+    return {
+        "validation": _baseline_partition_reports(data_split.validation, config),
+        "test": _baseline_partition_reports(data_split.test, config),
     }
+
+
+def _baseline_partition_reports(
+    frame: pd.DataFrame,
+    config: TrainingConfig,
+) -> dict[str, Any]:
+    if frame.empty:
+        return {}
+
+    future_returns = frame[TARGET_RETURN_COLUMN]
+    close_column = f"{config.trading_symbol}_close"
+    cash = _cash_baseline_metrics(len(frame))
+    cash["benchmark_cumulative_return"] = _benchmark_cumulative_return(future_returns)
+
+    reports = {
+        "cash": cash,
+        "buy_and_hold": _baseline_backtest(
+            predictions=pd.Series(1, index=frame.index),
+            future_returns=future_returns,
+            config=config,
+        ),
+    }
+    reports["buy_and_hold"]["baseline"] = "buy_and_hold"
+
+    if close_column in frame.columns:
+        close = frame[close_column]
+        sma_signal = close > close.rolling(72, min_periods=72).mean()
+        momentum_signal = close.pct_change(12) > 0.0
+        reports["sma_trend"] = _baseline_backtest(
+            predictions=_binary_position_signal(sma_signal),
+            future_returns=future_returns,
+            config=config,
+        )
+        reports["sma_trend"]["baseline"] = "sma_trend"
+        reports["momentum_12"] = _baseline_backtest(
+            predictions=_binary_position_signal(momentum_signal),
+            future_returns=future_returns,
+            config=config,
+        )
+        reports["momentum_12"]["baseline"] = "momentum_12"
+    return reports
+
+
+def _baseline_backtest(
+    *,
+    predictions: pd.Series,
+    future_returns: pd.Series,
+    config: TrainingConfig,
+) -> dict[str, Any]:
+    return backtest_metrics(
+        predictions=predictions,
+        future_returns=future_returns,
+        transaction_fee=config.backtest.transaction_fee,
+        initial_position=config.backtest.initial_position,
+        portfolio_mode=config.backtest.portfolio_mode,
+    )
+
+
+def _binary_position_signal(mask: pd.Series) -> pd.Series:
+    """Convert a boolean long/cash condition to explicit long/cash signals."""
+    return pd.Series(mask.fillna(False).map({True: 1, False: -1}), index=mask.index)
+
+
+def _benchmark_cumulative_return(future_returns: pd.Series) -> float:
+    return float((1.0 + future_returns.fillna(0.0)).prod() - 1.0)
+
+
+def _best_candidate_before_filters(
+    model_selection: ModelSelectionResult,
+) -> object | None:
+    candidates = model_selection.candidates
+    if not candidates:
+        return None
+    finite = [
+        candidate
+        for candidate in candidates
+        if math.isfinite(candidate.return_over_drawdown)
+    ]
+    if finite:
+        return max(finite, key=lambda candidate: candidate.return_over_drawdown)
+    return candidates[0]
 
 
 def _create_run_dir(artifacts_dir: Path) -> Path:

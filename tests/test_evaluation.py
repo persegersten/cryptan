@@ -12,6 +12,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 
 from src.config.model import TrainingConfig
 from src.evaluation.metrics import RETURN_OVER_DRAWDOWN_METRIC, backtest_metrics
+from src.evaluation.metrics import probability_policy_backtest
 from src.evaluation.metrics import signals_to_target_positions
 from src.evaluation import evaluate_and_save_report, evaluate_model
 from src.labels.target import TARGET_LABEL_COLUMN, TARGET_RETURN_COLUMN
@@ -24,13 +25,18 @@ _API_SECRET = "test-api-secret-xyz789"
 
 
 class FixedPredictionClassifier(BaseEstimator, ClassifierMixin):
-    """Estimator that returns a fixed prediction vector."""
+    """Estimator that returns fixed binary predictions/probabilities."""
 
     def __init__(self, predictions: list[int]) -> None:
         self.predictions = predictions
+        self.classes_ = np.asarray([0, 1])
 
     def predict(self, X: object) -> np.ndarray:
         return np.asarray(self.predictions[: len(X)])
+
+    def predict_proba(self, X: object) -> np.ndarray:
+        positive = np.asarray([1.0 if value == 1 else 0.0 for value in self.predict(X)])
+        return np.column_stack([1.0 - positive, positive])
 
 
 def _make_config(tmp_path: Path | None = None) -> TrainingConfig:
@@ -99,9 +105,15 @@ def _make_selection(predictions: list[int]) -> ModelSelectionResult:
             "max_drawdown": -0.03,
             "turnover": 2.0,
             "traded_bars": 2,
+            "exposure_ratio": 0.40,
         },
+        entry_threshold=0.5,
+        exit_threshold=0.4,
+        min_hold_bars=0,
+        return_buffer=0.005,
         validation_score=4.0,
-        rejection_reason=None,
+        return_over_drawdown=4.0,
+        rejection_reasons=[],
     )
     return ModelSelectionResult(
         best_candidate=candidate,
@@ -118,20 +130,19 @@ class TestEvaluateModel:
         report = evaluate_model(selection, _make_split(), _make_config())
 
         assert report["ml_metrics"]["accuracy"] == 0.5
-        assert report["ml_metrics"]["confusion_matrix"]["labels"] == [-1, 0, 1]
+        assert report["ml_metrics"]["confusion_matrix"]["labels"] == [0, 1]
         assert report["ml_metrics"]["confusion_matrix"]["matrix"] == [
-            [0, 0, 1],
-            [0, 1, 0],
-            [1, 0, 1],
+            [1, 1],
+            [1, 1],
         ]
         assert report["backtest_metrics"]["transaction_fee"] == 0.01
-        assert report["backtest_metrics"]["traded_bars"] == 2
-        assert report["backtest_metrics"]["exposure_ratio"] == pytest.approx(0.5)
-        assert report["backtest_metrics"]["hit_rate"] == pytest.approx(0.5)
+        assert report["backtest_metrics"]["traded_bars"] == 1
+        assert report["backtest_metrics"]["exposure_ratio"] == pytest.approx(0.25)
+        assert report["backtest_metrics"]["hit_rate"] == pytest.approx(0.0)
         assert report["backtest_metrics"]["turnover"] == 2.0
-        assert report["backtest_metrics"]["strategy_return_sum"] == pytest.approx(0.13)
+        assert report["backtest_metrics"]["strategy_return_sum"] == pytest.approx(-0.07)
         assert report["backtest_metrics"]["cumulative_return"] == pytest.approx(
-            (1.0 * 0.94 * 1.20 * 0.99) - 1.0
+            (1.0 * 0.94 * 0.99 * 1.0) - 1.0
         )
         assert report["backtest_metrics"]["execution_lag_bars"] == 1
         assert report["backtest_metrics"]["executed_position_min"] == 0.0
@@ -153,6 +164,9 @@ class TestEvaluateModel:
         assert report["run_metadata"]["initial_position"] == 0
         assert report["run_metadata"]["max_validation_drawdown_filter"] == -0.85
         assert report["run_metadata"]["max_validation_turnover_filter"] == 250.0
+        assert report["run_metadata"]["min_validation_cumulative_return"] == 0.10
+        assert report["run_metadata"]["min_validation_exposure_ratio"] == 0.10
+        assert report["run_metadata"]["min_validation_traded_bars"] == 100
         assert report["run_metadata"]["label_generation"] == "split_local"
         assert report["run_metadata"]["train_rows_raw"] == 5
         assert report["run_metadata"]["train_rows_labelled"] == 2
@@ -168,7 +182,10 @@ class TestEvaluateModel:
         assert candidate["validation_turnover"] == 2.0
         assert candidate["validation_traded_bars"] == 2
         assert candidate["validation_backtest_metrics"]["traded_bars"] == 2
-        assert "rejection_reason" not in candidate
+        assert candidate["rejection_reasons"] == []
+        assert report["candidate_summary"][0]["eligible"] is True
+        assert report["candidate_summary"][0]["validation_exposure_ratio"] == 0.40
+        assert report["candidate_summary"][0]["rejection_reasons"] == []
 
     def test_report_includes_rejection_reason_for_rejected_candidate(self) -> None:
         selection = _make_selection([1, 0, -1, 1])
@@ -181,12 +198,18 @@ class TestEvaluateModel:
             validation_backtest_metrics={
                 "bars": 100,
                 "traded_bars": 10,
+                "exposure_ratio": 0.10,
                 "cumulative_return": 0.50,
                 "max_drawdown": -0.86,
                 "turnover": 10.0,
             },
+            entry_threshold=0.5,
+            exit_threshold=0.4,
+            min_hold_bars=0,
+            return_buffer=0.005,
             validation_score=float("-inf"),
-            rejection_reason="validation_max_drawdown_below_-0.85",
+            return_over_drawdown=5.0,
+            rejection_reasons=["validation_max_drawdown_below_limit"],
         )
         selection = ModelSelectionResult(
             best_candidate=selection.best_candidate,
@@ -203,9 +226,10 @@ class TestEvaluateModel:
         assert rejected_payload["validation_max_drawdown"] == -0.86
         assert rejected_payload["validation_turnover"] == 10.0
         assert (
-            rejected_payload["rejection_reason"]
-            == "validation_max_drawdown_below_-0.85"
+            rejected_payload["rejection_reasons"]
+            == ["validation_max_drawdown_below_limit"]
         )
+        assert report["candidate_summary"][1]["eligible"] is False
 
     def test_no_eligible_model_uses_cash_baseline_and_no_selected_model(self) -> None:
         rejected = CandidateTrainingResult(
@@ -217,12 +241,18 @@ class TestEvaluateModel:
             validation_backtest_metrics={
                 "bars": 100,
                 "traded_bars": 10,
+                "exposure_ratio": 0.10,
                 "cumulative_return": 0.50,
                 "max_drawdown": -0.86,
                 "turnover": 10.0,
             },
+            entry_threshold=0.5,
+            exit_threshold=0.4,
+            min_hold_bars=0,
+            return_buffer=0.005,
             validation_score=float("-inf"),
-            rejection_reason="validation_max_drawdown_below_-0.85",
+            return_over_drawdown=5.0,
+            rejection_reasons=["validation_max_drawdown_below_limit"],
         )
         selection = ModelSelectionResult(
             best_candidate=None,
@@ -237,7 +267,10 @@ class TestEvaluateModel:
         assert metadata["selected_model"] is None
         assert metadata["model_selection_status"] == "no_eligible_model"
         assert metadata["trading_enabled"] is False
-        assert metadata["no_trade_reason"] == "No candidate passed validation risk filters"
+        assert (
+            metadata["no_trade_reason"]
+            == "No candidate passed binary long/cash validation filters"
+        )
         assert metadata["eligible_candidate_count"] == 0
         assert metadata["rejected_candidate_count"] == 1
         assert metadata["risk_filters_applied"] is True
@@ -347,3 +380,19 @@ class TestBacktestExecutionTiming:
         assert metrics["executed_position_min"] == 0.0
         assert metrics["executed_position_max"] == 1.0
         assert metrics["executed_positions_are_long_cash"] is True
+
+    def test_probability_policy_uses_hysteresis_and_min_hold(self) -> None:
+        metrics = probability_policy_backtest(
+            probabilities=[0.80, 0.30, 0.30, 0.30, 0.30, 0.30],
+            future_returns=pd.Series([0.0] * 6),
+            transaction_fee=0.01,
+            entry_threshold=0.60,
+            exit_threshold=0.40,
+            min_hold_bars=3,
+        )
+
+        assert metrics["entry_signals"] == 1
+        assert metrics["exit_signals"] == 1
+        assert metrics["turnover"] == 2.0
+        assert metrics["executed_position_min"] == 0.0
+        assert metrics["executed_position_max"] == 1.0

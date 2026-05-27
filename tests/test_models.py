@@ -19,7 +19,7 @@ _API_SECRET = "test-api-secret-xyz789"
 
 
 class SignClassifier(BaseEstimator, ClassifierMixin):
-    """Predict class 1 when the first feature is positive, else -1."""
+    """Predict class 1 when the first feature is positive, else 0."""
 
     def fit(self, X: object, y: object) -> "SignClassifier":
         self.classes_ = np.unique(y)
@@ -27,7 +27,11 @@ class SignClassifier(BaseEstimator, ClassifierMixin):
 
     def predict(self, X: object) -> np.ndarray:
         values = np.asarray(X)
-        return np.where(values[:, 0] > 0, 1, -1)
+        return np.where(values[:, 0] > 0, 1, 0)
+
+    def predict_proba(self, X: object) -> np.ndarray:
+        positive = self.predict(X).astype(float)
+        return np.column_stack([1.0 - positive, positive])
 
 
 class FixedPredictionClassifier(BaseEstimator, ClassifierMixin):
@@ -42,6 +46,10 @@ class FixedPredictionClassifier(BaseEstimator, ClassifierMixin):
 
     def predict(self, X: object) -> np.ndarray:
         return np.asarray(self.predictions[: len(X)])
+
+    def predict_proba(self, X: object) -> np.ndarray:
+        positive = np.asarray([1.0 if value == 1 else 0.0 for value in self.predict(X)])
+        return np.column_stack([1.0 - positive, positive])
 
 
 class CapturingClassifier(BaseEstimator, ClassifierMixin):
@@ -63,6 +71,7 @@ def _make_config(
     *,
     metric: str = "accuracy",
     candidates: list[dict] | None = None,
+    backtest: dict | None = None,
 ) -> TrainingConfig:
     return TrainingConfig(
         trading_symbol="ETH",
@@ -71,6 +80,17 @@ def _make_config(
         start_date=-365,
         end_date=-1,
         model_selection_metric=metric,
+        backtest=backtest
+        or {
+            "min_validation_cumulative_return": -999.0,
+            "min_validation_exposure_ratio": 0.0,
+            "min_validation_traded_bars": 0,
+            "max_validation_drawdown": -0.85,
+            "max_validation_turnover": 250.0,
+            "entry_thresholds": [0.5],
+            "exit_thresholds": [0.4],
+            "min_hold_bars_grid": [0],
+        },
         model_candidates=candidates
         or [
             {
@@ -99,7 +119,7 @@ def _make_split() -> ChronologicalSplit:
             "signal": [-3.0, -0.5, 0.25, 4.0],
             "ETH_close": [100.0, 101.0, 102.0, 103.0],
             TARGET_RETURN_COLUMN: [0.10, 0.10, -0.10, 0.10],
-            TARGET_LABEL_COLUMN: [-1, 1, -1, 1],
+            TARGET_LABEL_COLUMN: [0, 1, 0, 1],
         }
     )
     test = _frame([-10.0, 10.0])
@@ -107,7 +127,7 @@ def _make_split() -> ChronologicalSplit:
 
 
 def _frame(signal_values: list[float]) -> pd.DataFrame:
-    labels = [-1 if value <= 0 else 1 for value in signal_values]
+    labels = [0 if value <= 0 else 1 for value in signal_values]
     return pd.DataFrame(
         {
             "timestamp": pd.date_range(
@@ -115,7 +135,7 @@ def _frame(signal_values: list[float]) -> pd.DataFrame:
             ),
             "signal": signal_values,
             "ETH_close": [100.0 + index for index in range(len(signal_values))],
-            TARGET_RETURN_COLUMN: [-label * 0.10 for label in labels],
+            TARGET_RETURN_COLUMN: [(0.10 if label == 1 else -0.10) for label in labels],
             TARGET_LABEL_COLUMN: labels,
         }
     )
@@ -125,9 +145,9 @@ def _frame(signal_values: list[float]) -> pd.DataFrame:
 def _patch_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_build_estimator(model_type: str, model_params: dict) -> object:
         if model_type == "F1Winner":
-            return FixedPredictionClassifier([-1, 1, -1, 1])
+            return FixedPredictionClassifier([0, 1, 0, 1])
         if model_type == "ReturnWinner":
-            return FixedPredictionClassifier([1, -1, 1, -1])
+            return FixedPredictionClassifier([1, 0, 1, 0])
         if model_type == "SignClassifier":
             return SignClassifier()
         raise AssertionError(f"Unexpected model_type: {model_type}")
@@ -143,12 +163,12 @@ class TestTrainAndSelectModel:
 
         result = train_and_select_model(_make_split(), config)
 
-        assert result.best_candidate.name == "return_winner"
+        assert result.best_candidate.name.startswith("return_winner")
         assert result.selection_metric == RETURN_OVER_DRAWDOWN_METRIC
         assert result.best_candidate.validation_score > 0
         assert result.candidates[0].validation_metrics["f1_macro"] == 1.0
         assert result.candidates[0].validation_score < 0
-        assert [candidate.name for candidate in result.candidates] == [
+        assert [candidate.name.split("|")[0] for candidate in result.candidates] == [
             "f1_winner",
             "return_winner",
         ]
@@ -175,13 +195,13 @@ class TestTrainAndSelectModel:
         assert result.best_candidate.validation_backtest_metrics[
             "cumulative_return"
         ] == 0.0
-        assert result.best_candidate.validation_score < 0
+        assert result.best_candidate.validation_score == 0.0
 
     def test_invalid_validation_backtest_gets_negative_infinity_score(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def fake_build_estimator(model_type: str, model_params: dict) -> object:
-            return FixedPredictionClassifier([1, -1, 1, -1])
+            return FixedPredictionClassifier([1, 0, 1, 0])
 
         def fake_backtest_metrics(**_: object) -> dict[str, float]:
             return {
@@ -209,30 +229,34 @@ class TestTrainAndSelectModel:
         assert result.eligible_candidate_count == 0
         assert result.rejected_candidate_count == 1
         assert result.candidates[0].validation_score == float("-inf")
-        assert result.candidates[0].rejection_reason == "validation_backtest_non_finite"
+        assert result.candidates[0].rejection_reasons == [
+            "validation_backtest_non_finite"
+        ]
 
     @pytest.mark.parametrize(
-        ("metrics", "expected_reason"),
+        ("metrics", "expected_reasons"),
         [
             (
                 {
                     "bars": 100,
                     "traded_bars": 10,
+                    "exposure_ratio": 0.10,
                     "cumulative_return": 0.50,
                     "max_drawdown": -0.86,
                     "turnover": 10.0,
                 },
-                "validation_max_drawdown_below_-0.85",
+                ["validation_max_drawdown_below_limit"],
             ),
             (
                 {
                     "bars": 100,
                     "traded_bars": 10,
+                    "exposure_ratio": 0.10,
                     "cumulative_return": 0.50,
                     "max_drawdown": -0.10,
                     "turnover": 251.0,
                 },
-                "validation_turnover_above_250",
+                ["validation_turnover_above_maximum"],
             ),
         ],
     )
@@ -240,10 +264,10 @@ class TestTrainAndSelectModel:
         self,
         monkeypatch: pytest.MonkeyPatch,
         metrics: dict[str, float],
-        expected_reason: str,
+        expected_reasons: list[str],
     ) -> None:
         def fake_build_estimator(model_type: str, model_params: dict) -> object:
-            return FixedPredictionClassifier([1, -1, 1, -1])
+            return FixedPredictionClassifier([1, 0, 1, 0])
 
         def fake_backtest_metrics(**_: object) -> dict[str, float]:
             return metrics
@@ -268,7 +292,7 @@ class TestTrainAndSelectModel:
         assert result.eligible_candidate_count == 0
         assert result.rejected_candidate_count == 1
         assert result.candidates[0].validation_score == float("-inf")
-        assert result.candidates[0].rejection_reason == expected_reason
+        assert result.candidates[0].rejection_reasons == expected_reasons
         assert result.candidates[0].validation_backtest_metrics is metrics
 
     def test_rejected_candidates_are_never_selected_when_finite_candidate_exists(
@@ -285,6 +309,7 @@ class TestTrainAndSelectModel:
             "rejected": {
                 "bars": 100,
                 "traded_bars": 10,
+                "exposure_ratio": 0.10,
                 "cumulative_return": 10.0,
                 "max_drawdown": -0.86,
                 "turnover": 10.0,
@@ -292,6 +317,7 @@ class TestTrainAndSelectModel:
             "eligible": {
                 "bars": 100,
                 "traded_bars": 10,
+                "exposure_ratio": 0.10,
                 "cumulative_return": 0.20,
                 "max_drawdown": -0.10,
                 "turnover": 10.0,
@@ -314,12 +340,14 @@ class TestTrainAndSelectModel:
         result = train_and_select_model(_make_split(), config)
 
         assert result.best_candidate is not None
-        assert result.best_candidate.name == "eligible"
-        assert result.best_candidate.rejection_reason is None
-        assert result.best_candidate.validation_score == pytest.approx(2.0)
+        assert result.best_candidate.name.startswith("eligible")
+        assert result.best_candidate.rejection_reasons == []
+        assert result.best_candidate.validation_score == pytest.approx(0.165)
         assert result.eligible_candidate_count == 1
         assert result.rejected_candidate_count == 1
-        assert result.candidates[0].rejection_reason == "validation_max_drawdown_below_-0.85"
+        assert result.candidates[0].rejection_reasons == [
+            "validation_max_drawdown_below_limit"
+        ]
 
     def test_all_rejected_candidates_produce_no_selected_model(
         self, monkeypatch: pytest.MonkeyPatch
@@ -331,6 +359,7 @@ class TestTrainAndSelectModel:
             return {
                 "bars": 100,
                 "traded_bars": 10,
+                "exposure_ratio": 0.10,
                 "cumulative_return": 0.50,
                 "max_drawdown": -0.86,
                 "turnover": 10.0,
@@ -351,7 +380,66 @@ class TestTrainAndSelectModel:
         assert result.model_selection_status == "no_eligible_model"
         assert result.eligible_candidate_count == 0
         assert result.rejected_candidate_count == 2
-        assert all(candidate.rejection_reason is not None for candidate in result.candidates)
+        assert all(candidate.rejection_reasons for candidate in result.candidates)
+
+    def test_inactive_candidate_rejected_before_high_risk_selection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_build_estimator(model_type: str, model_params: dict) -> object:
+            return FixedPredictionClassifier([1, 1, 1, 1])
+
+        backtests = iter(
+            [
+                {
+                    "bars": 1_000,
+                    "traded_bars": 4,
+                    "exposure_ratio": 0.004,
+                    "cumulative_return": 0.02,
+                    "max_drawdown": -0.001,
+                    "turnover": 1.0,
+                },
+                {
+                    "bars": 1_000,
+                    "traded_bars": 250,
+                    "exposure_ratio": 0.25,
+                    "cumulative_return": 0.40,
+                    "max_drawdown": -0.40,
+                    "turnover": 20.0,
+                },
+            ]
+        )
+
+        def fake_backtest_metrics(**_: object) -> dict[str, float]:
+            return next(backtests)
+
+        monkeypatch.setattr("src.models.trainer.build_estimator", fake_build_estimator)
+        monkeypatch.setattr("src.models.trainer.backtest_metrics", fake_backtest_metrics)
+        config = _make_config(
+            backtest={
+                "min_validation_cumulative_return": 0.10,
+                "min_validation_exposure_ratio": 0.10,
+                "min_validation_traded_bars": 100,
+                "max_validation_drawdown": -0.85,
+                "max_validation_turnover": 250.0,
+                "entry_thresholds": [0.5],
+                "exit_thresholds": [0.4],
+                "min_hold_bars_grid": [0],
+            },
+            candidates=[
+                {"name": "inactive", "model_type": "Inactive", "model_params": {}},
+                {"name": "active", "model_type": "Active", "model_params": {}},
+            ],
+        )
+
+        result = train_and_select_model(_make_split(), config)
+
+        assert result.best_candidate is not None
+        assert result.best_candidate.name.startswith("active")
+        assert result.candidates[0].rejection_reasons == [
+            "validation_return_below_minimum",
+            "validation_exposure_ratio_below_minimum",
+            "validation_traded_bars_below_minimum",
+        ]
 
     def test_feature_columns_exclude_label_and_future_return(
         self, _patch_registry: None
@@ -383,13 +471,23 @@ class TestTrainAndSelectModel:
             model_type="SignClassifier",
             model_params={"unused": 1},
             model_selection_metric="accuracy",
+            backtest={
+                "min_validation_cumulative_return": -999.0,
+                "min_validation_exposure_ratio": 0.0,
+                "min_validation_traded_bars": 0,
+                "max_validation_drawdown": -0.85,
+                "max_validation_turnover": 250.0,
+                "entry_thresholds": [0.5],
+                "exit_thresholds": [0.4],
+                "min_hold_bars_grid": [0],
+            },
             data_api_key=_API_KEY,
             data_api_secret=_API_SECRET,
         )
 
         result = train_and_select_model(_make_split(), config)
 
-        assert result.best_candidate.name == "SignClassifier"
+        assert result.best_candidate.name.startswith("SignClassifier")
         assert len(result.candidates) == 1
 
     def test_no_numeric_feature_columns_raises(self, _patch_registry: None) -> None:
@@ -458,7 +556,7 @@ class TestTrainAndSelectModel:
                 ),
                 "signal": [0.0, 2.0, np.nan, 4.0],
                 TARGET_RETURN_COLUMN: [0.01, 0.01, -0.01, -0.01],
-                TARGET_LABEL_COLUMN: [1, 1, -1, -1],
+                TARGET_LABEL_COLUMN: [1, 1, 0, 0],
             }
         )
         validation = pd.DataFrame(
@@ -468,7 +566,7 @@ class TestTrainAndSelectModel:
                 ),
                 "signal": [1_000.0, np.nan],
                 TARGET_RETURN_COLUMN: [0.01, -0.01],
-                TARGET_LABEL_COLUMN: [1, -1],
+                TARGET_LABEL_COLUMN: [1, 0],
             }
         )
         test = validation.copy()
