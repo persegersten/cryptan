@@ -155,6 +155,7 @@ def _manifest(
         "feature_schema_file": "feature_schema.json",
         "strategy_config_file": "strategy_config.json",
         "evaluation_report_file": "evaluation_report.json",
+        "evaluation_report_html_file": "evaluation_report.html",
         "approved_for_live_pilot": bool(verdict.get("live_pilot_allowed", False)),
         "experiment_verdict": verdict.get("status"),
         "training_row_counts": {
@@ -344,10 +345,11 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def _write_sha256sums(bundle_dir: Path) -> None:
     rows = []
-    for path in sorted(bundle_dir.iterdir(), key=lambda item: item.name):
-        if not path.is_file() or path.name == "sha256sums.txt":
+    for path in _bundle_files(bundle_dir):
+        relative_path = path.relative_to(bundle_dir).as_posix()
+        if relative_path == "sha256sums.txt":
             continue
-        rows.append(f"{_file_sha256(path)}  {path.name}")
+        rows.append(f"{_file_sha256(path)}  {relative_path}")
     (bundle_dir / "sha256sums.txt").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
@@ -356,9 +358,17 @@ def _write_archive(bundle_dir: Path) -> Path:
     if archive_path.exists():
         archive_path.unlink()
     with tarfile.open(archive_path, "w:gz") as archive:
-        for path in sorted(bundle_dir.iterdir(), key=lambda item: item.name):
-            archive.add(path, arcname=f"{bundle_dir.name}/{path.name}")
+        for path in _bundle_files(bundle_dir):
+            relative_path = path.relative_to(bundle_dir).as_posix()
+            archive.add(path, arcname=f"{bundle_dir.name}/{relative_path}")
     return archive_path
+
+
+def _bundle_files(bundle_dir: Path) -> list[Path]:
+    return sorted(
+        [path for path in bundle_dir.rglob("*") if path.is_file()],
+        key=lambda item: item.relative_to(bundle_dir).as_posix(),
+    )
 
 
 def _file_sha256(path: Path) -> str:

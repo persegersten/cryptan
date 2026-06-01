@@ -171,6 +171,7 @@ def test_export_model_bundle_writes_expected_files_and_loadable_model(
     assert manifest["model_task"] == "binary_long_cash"
     assert manifest["trading_symbol"] == "ETH"
     assert manifest["model_file"] in {"model.joblib", "model.skops"}
+    assert manifest["evaluation_report_html_file"] == "evaluation_report.html"
     assert (artifact.bundle_dir / manifest["model_file"]).exists()
 
     feature_schema = json.loads(
@@ -198,6 +199,7 @@ def test_export_model_bundle_writes_expected_files_and_loadable_model(
     }
     assert expected_names - {"sha256sums.txt"} <= checksum_names
     assert manifest["model_file"] in checksum_names
+    assert "evaluation_report.html" in checksum_names
 
     loaded = load_persisted_model(artifact.bundle_dir / manifest["model_file"])
     sample = split.test[feature_schema["feature_names"]].head(2)
