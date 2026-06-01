@@ -1,0 +1,90 @@
+# Production export config for the ETH binary long/cash MVP strategy.
+# Secrets are injected from CRYPTAN_DATA_API_KEY and CRYPTAN_DATA_API_SECRET.
+
+trading_symbol: ETH
+signal_symbols:
+  - ETH
+  - BNB
+  - SOL
+
+timeframe: 1h
+prediction_horizon_bars: 12
+model_task: binary_long_cash
+return_threshold: 0.01
+
+start_date: -365
+end_date: -1
+
+split:
+  train: 0.70
+  validation: 0.15
+  test: 0.15
+
+backtest:
+  portfolio_mode: all_in_long_cash
+  initial_position: 0
+  transaction_fee: 0.001
+  return_buffer: 0.005
+  min_validation_cumulative_return: 0.10
+  min_validation_exposure_ratio: 0.10
+  min_validation_traded_bars: 100
+  max_validation_drawdown: -0.85
+  max_validation_turnover: 250.0
+
+model_type: RandomForestClassifier
+model_params:
+  n_estimators: 100
+  random_state: 42
+  n_jobs: -1
+
+model_selection_metric: f1_macro
+model_candidates:
+  - name: logistic_regression
+    model_type: LogisticRegression
+    model_params:
+      max_iter: 1000
+      random_state: 42
+  - name: random_forest
+    model_type: RandomForestClassifier
+    model_params:
+      n_estimators: 100
+      random_state: 42
+      n_jobs: -1
+  - name: random_forest_balanced
+    model_type: RandomForestClassifier
+    model_params:
+      n_estimators: 200
+      class_weight: balanced
+      random_state: 42
+      n_jobs: -1
+  - name: extra_trees_balanced
+    model_type: ExtraTreesClassifier
+    model_params:
+      n_estimators: 300
+      class_weight: balanced
+      random_state: 42
+      n_jobs: -1
+  - name: gradient_boosting
+    model_type: GradientBoostingClassifier
+    model_params:
+      n_estimators: 150
+      learning_rate: 0.05
+      max_depth: 3
+      random_state: 42
+  - name: hist_gradient_boosting
+    model_type: HistGradientBoostingClassifier
+    model_params:
+      max_iter: 150
+      learning_rate: 0.05
+      l2_regularization: 0.01
+      random_state: 42
+
+artifacts_dir: artifacts
+
+feature_config:
+  return_windows: [1, 5, 20]
+  ma_short_window: 7
+  ma_long_window: 20
+  volatility_window: 20
+  volume_window: 20
+  correlation_window: 20

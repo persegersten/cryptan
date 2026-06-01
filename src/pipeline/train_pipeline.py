@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -24,11 +25,14 @@ import pandas as pd
 from src.config.loader import load_config
 from src.config.model import TrainingConfig
 from src.evaluation import evaluate_and_save_report
+from src.evaluation.report import EvaluationArtifact
+from src.exporting import BundleArtifact, export_model_bundle
 from src.evaluation.metrics import RETURN_OVER_DRAWDOWN_METRIC
 from src.features.builder import build_features
 from src.ingestion.market_data import BinanceMarketDataSource
 from src.labels.target import add_target_labels
 from src.models import train_and_select_model
+from src.models.trainer import ModelSelectionResult
 from src.preprocessing.cleaner import clean_market_data
 from src.preprocessing.merger import merge_symbol_frames
 from src.splitting.chronological import ChronologicalSplit, split_features_chronologically
@@ -40,7 +44,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run(config: TrainingConfig) -> None:
+@dataclass(frozen=True)
+class TrainingRunArtifact:
+    """Outputs from one completed training pipeline run."""
+
+    model_selection: ModelSelectionResult
+    data_split: ChronologicalSplit
+    evaluation: EvaluationArtifact
+    bundle: BundleArtifact | None
+
+
+def run(
+    config: TrainingConfig,
+    *,
+    export_bundle_output: Path | None = Path("dist/model_bundle"),
+) -> TrainingRunArtifact:
     """Execute all pipeline steps for a single training run.
 
     Parameters
@@ -171,10 +189,28 @@ def run(config: TrainingConfig) -> None:
     logger.info("Evaluation report saved to %s", evaluation.report_path)
 
     # ------------------------------------------------------------------
-    # TODO: wire in model artifact persistence when pipeline step 9 is implemented
+    # Step 9: Export production inference bundle for selected long/cash model
     # ------------------------------------------------------------------
+    bundle = None
+    if export_bundle_output is not None:
+        logger.info("Exporting production model bundle to %s ...", export_bundle_output)
+        bundle = export_model_bundle(
+            model_selection=model_selection,
+            data_split=data_split,
+            config=config,
+            evaluation=evaluation,
+            output_dir=export_bundle_output,
+        )
+        logger.info("Model bundle exported to %s", bundle.bundle_dir)
+        logger.info("Model bundle archive exported to %s", bundle.archive_path)
 
     logger.info("=== cryptan training pipeline end ===")
+    return TrainingRunArtifact(
+        model_selection=model_selection,
+        data_split=data_split,
+        evaluation=evaluation,
+        bundle=bundle,
+    )
 
 
 def _label_split_partitions(
@@ -224,6 +260,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Keys in this file are merged on top of the base config."
         ),
     )
+    parser.add_argument(
+        "--export-bundle-output",
+        type=Path,
+        default=Path("dist/model_bundle"),
+        metavar="PATH",
+        help=(
+            "Output directory for the production model bundle. Use 'none' to disable."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -237,7 +282,12 @@ def main(argv: list[str] | None = None) -> None:
         logger.error("Failed to load config: %s", exc)
         sys.exit(1)
 
-    run(config)
+    export_output = (
+        None
+        if str(args.export_bundle_output).strip().lower() == "none"
+        else args.export_bundle_output
+    )
+    run(config, export_bundle_output=export_output)
 
 
 if __name__ == "__main__":
