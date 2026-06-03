@@ -19,8 +19,8 @@ These defaults must be easy to change through configuration. Do not hardcode the
 - `config/local.yaml` kan användas för lokala icke-känsliga overrides och är gitignorerad.
   Kopiera `config/local.yaml.example` → `config/local.yaml` för lokal dev.
 - `config/training.yaml` innehåller bara ML-parametrar och är alltid säker att committa.
-- Om ett krav-env-var (`CRYPTAN_DATA_API_KEY`, `CRYPTAN_DATA_API_SECRET`) saknas eller
-  fortfarande har värdet `changeme` kastas `EnvironmentError` med ett tydligt meddelande.
+- Om `CRYPTAN_DATA_API_KEY` eller `CRYPTAN_DATA_API_SECRET` saknas, är tom eller
+  fortfarande har värdet `changeme` loggas en varning och `changeme` används.
 
 ## Work style for agents
 When implementing work in this repository:

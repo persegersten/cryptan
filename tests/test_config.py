@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 import textwrap
 from pathlib import Path
 
@@ -126,40 +127,72 @@ class TestEnvVarCredentials:
         assert config.data_api_key == _TEST_API_KEY
         assert config.data_api_secret == _TEST_API_SECRET
 
-    def test_missing_api_key_raises_environment_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_missing_api_key_warns_and_uses_placeholder(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.delenv("CRYPTAN_DATA_API_KEY", raising=False)
-        with pytest.raises(EnvironmentError, match="CRYPTAN_DATA_API_KEY"):
-            load_config(write_yaml(tmp_path, MINIMAL_VALID))
+        with caplog.at_level(logging.WARNING, logger="src.config.loader"):
+            config = load_config(write_yaml(tmp_path, MINIMAL_VALID))
 
-    def test_missing_api_secret_raises_environment_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        assert config.data_api_key == "changeme"
+        assert "CRYPTAN_DATA_API_KEY" in caplog.text
+        assert "using 'changeme' and continuing" in caplog.text
+
+    def test_missing_api_secret_warns_and_uses_placeholder(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.delenv("CRYPTAN_DATA_API_SECRET", raising=False)
-        with pytest.raises(EnvironmentError, match="CRYPTAN_DATA_API_SECRET"):
-            load_config(write_yaml(tmp_path, MINIMAL_VALID))
+        with caplog.at_level(logging.WARNING, logger="src.config.loader"):
+            config = load_config(write_yaml(tmp_path, MINIMAL_VALID))
 
-    def test_placeholder_api_key_raises_environment_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        assert config.data_api_secret == "changeme"
+        assert "CRYPTAN_DATA_API_SECRET" in caplog.text
+        assert "using 'changeme' and continuing" in caplog.text
+
+    def test_placeholder_api_key_warns_and_uses_placeholder(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv("CRYPTAN_DATA_API_KEY", "changeme")
-        with pytest.raises(EnvironmentError, match="changeme"):
-            load_config(write_yaml(tmp_path, MINIMAL_VALID))
+        with caplog.at_level(logging.WARNING, logger="src.config.loader"):
+            config = load_config(write_yaml(tmp_path, MINIMAL_VALID))
 
-    def test_placeholder_api_secret_raises_environment_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        assert config.data_api_key == "changeme"
+        assert "CRYPTAN_DATA_API_KEY" in caplog.text
+
+    def test_placeholder_api_secret_warns_and_uses_placeholder(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv("CRYPTAN_DATA_API_SECRET", "changeme")
-        with pytest.raises(EnvironmentError, match="changeme"):
-            load_config(write_yaml(tmp_path, MINIMAL_VALID))
+        with caplog.at_level(logging.WARNING, logger="src.config.loader"):
+            config = load_config(write_yaml(tmp_path, MINIMAL_VALID))
 
-    def test_empty_api_key_raises_environment_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        assert config.data_api_secret == "changeme"
+        assert "CRYPTAN_DATA_API_SECRET" in caplog.text
+
+    def test_empty_api_key_warns_and_uses_placeholder(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv("CRYPTAN_DATA_API_KEY", "")
-        with pytest.raises(EnvironmentError, match="CRYPTAN_DATA_API_KEY"):
-            load_config(write_yaml(tmp_path, MINIMAL_VALID))
+        with caplog.at_level(logging.WARNING, logger="src.config.loader"):
+            config = load_config(write_yaml(tmp_path, MINIMAL_VALID))
+
+        assert config.data_api_key == "changeme"
+        assert "CRYPTAN_DATA_API_KEY" in caplog.text
 
 
 # ---------------------------------------------------------------------------

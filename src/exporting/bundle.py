@@ -302,8 +302,8 @@ def _model_card(
             "## How To Reproduce Training",
             (
                 "Run `python -m trading_model.export_bundle --config "
-                "configs/eth_long_cash.yml --output dist/model_bundle` with the "
-                "required data API environment variables set."
+                "configs/eth_long_cash.yml --output dist/model_bundle`. Set data "
+                "API environment variables if your data source requires them."
             ),
             "",
         ]

@@ -13,8 +13,8 @@ from src.config.model import TrainingConfig
 
 logger = logging.getLogger(__name__)
 
-# Maps TrainingConfig field names → environment variable names.
-_REQUIRED_ENV_VARS: dict[str, str] = {
+# Maps TrainingConfig credential field names to environment variable names.
+_CREDENTIAL_ENV_VARS: dict[str, str] = {
     "data_api_key": "CRYPTAN_DATA_API_KEY",
     "data_api_secret": "CRYPTAN_DATA_API_SECRET",
 }
@@ -22,23 +22,20 @@ _REQUIRED_ENV_VARS: dict[str, str] = {
 _PLACEHOLDER = "changeme"
 
 
-def _read_required_env_vars() -> dict[str, str]:
-    """Read required environment variables and return them keyed by field name.
-
-    Raises
-    ------
-    EnvironmentError
-        If any required variable is absent or still holds the placeholder value.
-    """
+def _read_credential_env_vars() -> dict[str, str]:
+    """Read credential environment variables, falling back to placeholders."""
     values: dict[str, str] = {}
-    for field_name, env_var in _REQUIRED_ENV_VARS.items():
+    for field_name, env_var in _CREDENTIAL_ENV_VARS.items():
         value = os.environ.get(env_var, "")
         if not value or value.strip().lower() == _PLACEHOLDER:
-            raise EnvironmentError(
-                f"Required environment variable {env_var!r} is not set or still uses "
-                f"the placeholder value {_PLACEHOLDER!r}. "
-                f"Set a real value before starting the pipeline."
+            logger.warning(
+                "Environment variable %s is not set or still uses the placeholder "
+                "value %r; using %r and continuing.",
+                env_var,
+                _PLACEHOLDER,
+                _PLACEHOLDER,
             )
+            value = _PLACEHOLDER
         values[field_name] = value
     return values
 
@@ -53,7 +50,7 @@ def load_config(
 
     1. Base config from *path* (always required, safe to commit).
     2. Optional local overrides from *local_path* (gitignored, never committed).
-    3. Required secrets injected from environment variables.
+    3. Optional credentials injected from environment variables.
 
     Parameters
     ----------
@@ -74,9 +71,6 @@ def load_config(
     ------
     FileNotFoundError
         If the base config file does not exist.
-    EnvironmentError
-        If a required environment variable is absent or holds the placeholder
-        value ``changeme``.
     ValueError
         If the merged YAML content fails schema validation.
     """
@@ -112,8 +106,8 @@ def load_config(
                 "Local override file not found, skipping: %s", local.resolve()
             )
 
-    # --- inject required credentials from environment variables ---
-    raw.update(_read_required_env_vars())
+    # --- inject credentials from environment variables ---
+    raw.update(_read_credential_env_vars())
 
     try:
         config = TrainingConfig(**raw)

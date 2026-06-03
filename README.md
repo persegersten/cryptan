@@ -6,9 +6,9 @@ Crypto trading model
 ### 1. Lokal development (CLI)
 
 ```bash
-# Konfigurera secrets
+# Konfigurera secrets om datakällan kräver autentisering
 cp .env.example .env
-# Redigera .env och ersätt "changeme" med riktiga värden
+# Redigera .env och ersätt "changeme" med riktiga värden vid behov
 
 # (Valfritt) Lokal config override — kortare datumspann, annan artifacts-sökväg etc.
 cp config/local.yaml.example config/local.yaml
@@ -22,7 +22,7 @@ python -m src.pipeline.train_pipeline --config config/training.yaml
 ### 2. Remote / CI-host (miljövariabler)
 
 ```bash
-# Sätt krävda env-vars i shell eller CI-systemets secrets store — inga lokala filer behövs
+# Sätt env-vars i shell eller CI-systemets secrets store vid behov — inga lokala filer behövs
 export CRYPTAN_DATA_API_KEY=xxx
 export CRYPTAN_DATA_API_SECRET=yyy
 
@@ -39,6 +39,6 @@ python -m src.pipeline.train_pipeline --config config/training.yaml
 | Secrets | `.env` / OS env vars | ❌ Nej | API-nycklar och känsliga värden |
 | Template | `.env.example` | ✅ Ja | Mall med `changeme` som platshållare |
 
-Känsliga värden (`CRYPTAN_DATA_API_KEY`, `CRYPTAN_DATA_API_SECRET`) måste anges som
-miljövariabler. Om de saknas eller fortfarande är `changeme` kastas ett tydligt
-`EnvironmentError` vid uppstart.
+Känsliga värden (`CRYPTAN_DATA_API_KEY`, `CRYPTAN_DATA_API_SECRET`) ska anges som
+miljövariabler när datakällan kräver dem. Om de saknas, är tomma eller fortfarande är
+`changeme` loggas en varning och pipeline fortsätter med `changeme`.
